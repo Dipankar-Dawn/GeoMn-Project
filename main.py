@@ -44,7 +44,7 @@ DATA_PATH = (
     / "final_manganese_ml_dataset.csv"
 )
 
-MODELS_DIR = BASE_DIR / "models"
+MODELS_DIR = BASE_DIR
 
 EQUIPMENT_MODEL_PATH = (
     MODELS_DIR
