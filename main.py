@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pathlib import Path
@@ -793,15 +794,15 @@ def generate_ai_recommendations(
 # HOME
 # =========================================================
 
-@app.get("/")
-def home():
+#@app.get("/")
+#def home():
 
-    return {
+ #   return {
 
-        "message":
-            "GeoMn Mining Risk Prediction API is running"
+  #      "message":
+  #          "GeoMn Mining Risk Prediction API is running"
 
-    }
+   # }
 
 
 # =========================================================
@@ -1400,3 +1401,7 @@ def predict(data: PredictionInput):
         "ai_recommendations":
             ai_recommendations
     }
+    @app.get("/")
+    def red_root():
+        return FileResponse("my_gpt.html")
+    
