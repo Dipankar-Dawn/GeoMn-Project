@@ -501,7 +501,7 @@ def generate_ai_recommendations(
 
 @app.get("/")
 def read_root():
-    html_path = Path(__file__).parent.parent / "my_gpt.html"
+    html_path = Path(__file__).parent / "my_gpt.html"
     return FileResponse(html_path)
 
 
