@@ -501,12 +501,8 @@ def generate_ai_recommendations(
 
 @app.get("/")
 def read_root():
-    if not HTML_FILE_PATH.is_file():
-        raise HTTPException(
-            status_code=404,
-            detail="my_gpt.html file not found in directory"
-        )
-    return FileResponse(HTML_FILE_PATH)
+    html_path = Path(__file__).parent.parent / "my_gpt.html"
+    return FileResponse(html_path)
 
 
 # =========================================================
