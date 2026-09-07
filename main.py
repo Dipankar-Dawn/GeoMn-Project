@@ -732,7 +732,27 @@ def read_root():
         HTML_FILE_PATH,
         media_type="text/html"
     )
+# =========================================================
+# SERVE MANGANESE MAP
+# =========================================================
 
+@app.get("/map")
+
+def get_map():
+
+    map_file = BASE_DIR / "moil_manganese_map.html"
+
+    if not map_file.exists():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Map file not found"
+        )
+
+    return FileResponse(
+        map_file,
+        media_type="text/html"
+    )
 
 # =========================================================
 # HEALTH CHECK
