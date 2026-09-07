@@ -211,7 +211,7 @@ runBtn.addEventListener('click', async () => {
 
         const response = await fetch(
 
-            '/predict',
+            'predict',
 
             {
 
@@ -571,135 +571,165 @@ report +=
 // ==========================================
 // MAIN RISK FACTORS
 // ==========================================
+// ==========================================
+// OPENAI OR RULE-BASED RECOMMENDATIONS
+// ==========================================
 
-const factors =
-    result.ai_recommendations
-        ?.top_risk_factors;
-
-
-if (Array.isArray(factors) && factors.length > 0) {
-
-    report += 'Main Risk Factors:\n';
+const aiRecommendation =
+    result.ai_recommendation;
 
 
-    factors.forEach((item, index) => {
+// ==========================================
+// OPENAI RECOMMENDATION
+// ==========================================
 
-        const factorName =
-            item.factor ||
-            item.name ||
-            item.risk_factor ||
-            'Environmental Risk';
+if (aiRecommendation) {
 
-
-        const score =
-            item.severity_score ??
-            item.score ??
-            item.risk_score ??
-            0;
-
-
-        report +=
-            (index + 1) +
-            '. ' +
-            factorName +
-            ' (Risk Level: ' +
-            Math.round(Number(score) * 100) +
-            '%)\n';
-
-    });
+    report +=
+        '\nAI-Powered Recommendation:\n\n' +
+        aiRecommendation +
+        '\n';
 
 }
 
 
 // ==========================================
-// RECOMMENDED ACTIONS
+// OFFLINE RULE-BASED FALLBACK
 // ==========================================
-
-const recommendations =
-    result.ai_recommendations
-        ?.recommendations;
-
-
-if (
-    Array.isArray(recommendations) &&
-    recommendations.length > 0
-) {
-
-    report += '\nRecommended Actions:\n';
-
-
-    recommendations.forEach((rec, index) => {
-
-
-        // Support different backend field names
-
-        const factor =
-            rec.factor ||
-            rec.title ||
-            rec.category ||
-            rec.name ||
-            'Recommended Action';
-
-
-        const reason =
-            rec.reason ||
-            rec.description ||
-            rec.message ||
-            rec.explanation ||
-            'This area should be monitored based on the current risk analysis.';
-
-
-        report +=
-            '\n' +
-            (index + 1) +
-            '. ' +
-            factor +
-            '\n';
-
-
-        report +=
-            'Why: ' +
-            reason +
-            '\n';
-
-
-        // ACTION LIST
-
-        const actions =
-            rec.actions ||
-            rec.recommended_actions ||
-            rec.action_steps;
-
-
-        if (
-            Array.isArray(actions) &&
-            actions.length > 0
-        ) {
-
-            actions.forEach(action => {
-
-                report +=
-                    '• ' +
-                    action +
-                    '\n';
-
-            });
-
-        }
-
-    });
-
-}
 
 else {
 
-    report +=
-        '\nRecommended Actions:\n' +
-        '• Continue regular monitoring of mining operations.\n' +
-        '• Monitor weather conditions before major operations.\n' +
-        '• Follow preventive equipment maintenance schedules.\n';
+    // ==========================================
+    // MAIN RISK FACTORS
+    // ==========================================
+
+    const factors =
+        result.ai_recommendations
+            ?.top_risk_factors;
+
+
+    if (Array.isArray(factors) && factors.length > 0) {
+
+        report += 'Main Risk Factors:\n';
+
+
+        factors.forEach((item, index) => {
+
+            const factorName =
+                item.factor ||
+                item.name ||
+                item.risk_factor ||
+                'Environmental Risk';
+
+
+            const score =
+                item.severity_score ??
+                item.score ??
+                item.risk_score ??
+                0;
+
+
+            report +=
+                (index + 1) +
+                '. ' +
+                factorName +
+                ' (Risk Level: ' +
+                Math.round(Number(score) * 100) +
+                '%)\n';
+
+        });
+
+    }
+
+
+    // ==========================================
+    // RECOMMENDED ACTIONS
+    // ==========================================
+
+    const recommendations =
+        result.ai_recommendations
+            ?.recommendations;
+
+
+    if (
+        Array.isArray(recommendations) &&
+        recommendations.length > 0
+    ) {
+
+        report += '\nRecommended Actions:\n';
+
+
+        recommendations.forEach((rec, index) => {
+
+
+            const factor =
+                rec.factor ||
+                rec.title ||
+                rec.category ||
+                rec.name ||
+                'Recommended Action';
+
+
+            const reason =
+                rec.reason ||
+                rec.description ||
+                rec.message ||
+                rec.explanation ||
+                'This area should be monitored based on the current risk analysis.';
+
+
+            report +=
+                '\n' +
+                (index + 1) +
+                '. ' +
+                factor +
+                '\n';
+
+
+            report +=
+                'Why: ' +
+                reason +
+                '\n';
+
+
+            const actions =
+                rec.actions ||
+                rec.recommended_actions ||
+                rec.action_steps;
+
+
+            if (
+                Array.isArray(actions) &&
+                actions.length > 0
+            ) {
+
+                actions.forEach(action => {
+
+                    report +=
+                        '• ' +
+                        action +
+                        '\n';
+
+                });
+
+            }
+
+        });
+
+    }
+
+    else {
+
+        report +=
+            '\nRecommended Actions:\n' +
+            '• Continue regular monitoring of mining operations.\n' +
+            '• Monitor weather conditions before major operations.\n' +
+            '• Follow preventive equipment maintenance schedules.\n';
+
+    }
 
 }
+
 
 
 // ==========================================
