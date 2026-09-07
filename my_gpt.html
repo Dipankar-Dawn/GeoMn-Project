@@ -220,7 +220,7 @@ runBtn.addEventListener('click', async () => {
 
         const response = await fetch(
 
-            'predict',
+            '/predict',
 
             {
 
@@ -382,9 +382,11 @@ runBtn.addEventListener('click', async () => {
                 : '--';
 
 
-        document.getElementById(
+        const mapPlaceholder = document.getElementById(
             'mapPlaceholder'
-        ).innerHTML = `
+        );
+        if(mapPlaceholder){
+        mapPlaceholder.innerHTML = `
 
             <div class="w-full h-full p-6">
 
@@ -503,7 +505,7 @@ runBtn.addEventListener('click', async () => {
             </div>
 
         `;
-
+        }
 
         // ==========================================
         // AI RECOMMENDATIONS
