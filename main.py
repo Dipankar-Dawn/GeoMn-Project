@@ -13,7 +13,10 @@ import pandas as pd
 import numpy as np
 import joblib
 import xgboost as xgb
-
+from sentinel2 import (
+    initialize_earth_engine,
+    generate_manganese_map
+)
 
 # =========================================================
 # PATHS
@@ -39,7 +42,16 @@ gemini_client = (
 print("Gemini API key found:", bool(GEMINI_API_KEY))
 print("Gemini client initialized:", gemini_client is not None)
 
+# =========================================================
+# INITIALIZE GOOGLE EARTH ENGINE
+# =========================================================
 
+EARTH_ENGINE_AVAILABLE = initialize_earth_engine()
+
+print(
+    "Earth Engine available:",
+    EARTH_ENGINE_AVAILABLE
+)
 # =========================================================
 # FASTAPI APP
 # =========================================================
@@ -161,7 +173,19 @@ class PredictionInput(BaseModel):
     district: str
     weather_condition: str
     production_tonnes: float | None = None
+# =========================================================
+# SENTINEL MAP REQUEST MODEL
+# =========================================================
 
+class MapRequest(BaseModel):
+
+    west: float
+
+    south: float
+
+    east: float
+
+    north: float
 
 # =========================================================
 # WEATHER SCENARIO FUNCTION
@@ -802,8 +826,105 @@ def get_districts(state: str):
 
         "districts": districts
     }
+# =========================================================
+# GENERATE SENTINEL-2 MANGANESE MAP
+# =========================================================
+
+@app.post("/generate-map")
+
+def generate_map(
+    data: MapRequest
+):
+
+    if not EARTH_ENGINE_AVAILABLE:
+
+        raise HTTPException(
+
+            status_code=503,
+
+            detail="Google Earth Engine is not available"
+
+        )
 
 
+    result = generate_manganese_map(
+
+        west=data.west,
+
+        south=data.south,
+
+        east=data.east,
+
+        north=data.north,
+
+        output_file=str(
+            BASE_DIR /
+            "moil_manganese_map.html"
+        )
+
+    )
+
+
+    if not result.get("success"):
+
+        raise HTTPException(
+
+            status_code=500,
+
+            detail=result.get(
+                "error",
+                "Sentinel map generation failed"
+            )
+
+        )
+
+
+    return {
+
+        "status": "success",
+
+        "message":
+            "Sentinel-2 manganese analysis completed",
+
+        "threshold":
+            result.get("threshold"),
+
+        "map_url":
+            "/map"
+
+    }
+# =========================================================
+# SERVE GENERATED SENTINEL MAP
+# =========================================================
+
+@app.get("/map")
+
+def get_map():
+
+    map_path = (
+        BASE_DIR /
+        "moil_manganese_map.html"
+    )
+
+
+    if not map_path.exists():
+
+        raise HTTPException(
+
+            status_code=404,
+
+            detail="Map has not been generated yet"
+
+        )
+
+
+    return FileResponse(
+
+        map_path,
+
+        media_type="text/html"
+
+    )
 # =========================================================
 # MAIN PREDICTION
 # =========================================================
