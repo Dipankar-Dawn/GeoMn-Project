@@ -54,7 +54,7 @@ app.add_middleware(
 # =========================================================
 
 BASE_DIR = Path(__file__).resolve().parent
-
+HTML_FILE_PATH = BASE_DIR / "my_gpt.html"
 DATA_PATH = (
     BASE_DIR
     / "data"
@@ -866,8 +866,7 @@ Format the answer clearly using bullet points.
 
 @app.get("/")
 def read_root():
-    html_path = Path(__file__).parent / "my_gpt.html"
-    return FileResponse(html_path,media_type="text/html")
+    return FileResponse(HTML_FILE_PATH, media_type="text/html")
 # =========================================================
 # HEALTH CHECK
 # =========================================================
