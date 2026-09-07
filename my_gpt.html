@@ -1,1511 +1,791 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
-
-from pathlib import Path
-import os
-
-from dotenv import load_dotenv
-from google import genai
-
-import pandas as pd
-import numpy as np
-import joblib
-import xgboost as xgb
-
-# =========================================================
-# FASTAPI APP
-# =========================================================
-
-# Load Gemini API key from .env file
-env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(env_path)
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-gemini_client = (
-    genai.Client(api_key=GEMINI_API_KEY)
-    if GEMINI_API_KEY
-    else None
-)
-
-print("Gemini API key found:", bool(GEMINI_API_KEY))
-print("Gemini client initialized:", gemini_client is not None)
-app = FastAPI(
-    title="GeoMn Mining Risk API",
-    description="AI/ML based Manganese Mining Risk Prediction System"
-)
-# =========================================================
-# CORS
-# =========================================================
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# =========================================================
-# PATHS
-# =========================================================
-
-BASE_DIR = Path(__file__).resolve().parent
-
-DATA_PATH = (
-    BASE_DIR
-    / "data"
-    / "final_manganese_ml_dataset.csv"
-)
-
-MODELS_DIR = BASE_DIR / "models"
-
-EQUIPMENT_MODEL_PATH = (
-    MODELS_DIR
-    / "equipment_risk_model.pkl"
-)
-
-SHORTFALL_MODEL_PATH = (
-    MODELS_DIR
-    / "production_shortfall_xgboost_model.json"
-)
-
-METADATA_PATH = (
-    MODELS_DIR
-    / "production_shortfall_model_metadata.pkl"
-)
-
-
-# =========================================================
-# LOAD DATASET
-# =========================================================
-
-try:
-
-    df = pd.read_csv(DATA_PATH)
-
-    print("✓ Historical dataset loaded successfully")
-
-except Exception as e:
-
-    df = None
-
-    print("✗ DATASET ERROR:")
-    print(e)
-
-
-# =========================================================
-# LOAD EQUIPMENT MODEL
-# =========================================================
-
-try:
-
-    equipment_model = joblib.load(
-        EQUIPMENT_MODEL_PATH
-    )
-
-    print("✓ Equipment risk model loaded successfully")
-
-except Exception as e:
-
-    equipment_model = None
-
-    print("✗ EQUIPMENT MODEL ERROR:")
-    print(e)
-
-
-# =========================================================
-# LOAD SHORTFALL XGBOOST MODEL
-# =========================================================
-
-try:
-
-    shortfall_model = xgb.XGBClassifier()
-
-    shortfall_model.load_model(
-        SHORTFALL_MODEL_PATH
-    )
-
-    print(
-        "✓ Production shortfall XGBoost model loaded successfully"
-    )
-
-except Exception as e:
-
-    shortfall_model = None
-
-    print("✗ SHORTFALL MODEL ERROR:")
-    print(e)
-
-
-# =========================================================
-# LOAD MODEL METADATA
-# =========================================================
-
-try:
-
-    metadata = joblib.load(
-        METADATA_PATH
-    )
-
-    print("✓ Model metadata loaded successfully")
-
-except Exception as e:
-
-    metadata = None
-
-    print("✗ METADATA ERROR:")
-    print(e)
-
-
-# =========================================================
-# REQUEST MODEL
-# =========================================================
-
-class PredictionInput(BaseModel):
-
-    state: str
-
-    district: str
-
-    weather_condition: str
-
-    # Optional for future simulation mode
-    production_tonnes: float | None = None
-
-
-# =========================================================
-# WEATHER SCENARIO FUNCTION
-# =========================================================
-
-def get_weather_values(
-    district_data,
-    weather_condition
-):
-
-    weather_condition = (
-        weather_condition.lower().strip()
-    )
-
-    # Dataset average values
-    avg_temperature = float(
-        district_data["Avg_Temperature_C"].mean()
-    )
-
-    avg_rainfall = float(
-        district_data["Total_Rainfall_mm"].mean()
-    )
-
-    avg_humidity = float(
-        district_data["Avg_Humidity_pct"].mean()
-    )
-
-
-    # GOOD WEATHER
-    if weather_condition == "good":
-
-        temperature = float(
-            district_data[
-                "Avg_Temperature_C"
-            ].quantile(0.25)
-        )
-
-        rainfall = float(
-            district_data[
-                "Total_Rainfall_mm"
-            ].quantile(0.25)
-        )
-
-        humidity = float(
-            district_data[
-                "Avg_Humidity_pct"
-            ].quantile(0.25)
-        )
-
-
-    # BAD WEATHER
-    elif weather_condition == "bad":
-
-        temperature = float(
-            district_data[
-                "Avg_Temperature_C"
-            ].quantile(0.75)
-        )
-
-        rainfall = float(
-            district_data[
-                "Total_Rainfall_mm"
-            ].quantile(0.75)
-        )
-
-        humidity = float(
-            district_data[
-                "Avg_Humidity_pct"
-            ].quantile(0.75)
-        )
-
-
-    # WORST WEATHER
-    elif weather_condition == "worst":
-
-        temperature = float(
-            district_data[
-                "Avg_Temperature_C"
-            ].max()
-        )
-
-        rainfall = float(
-            district_data[
-                "Total_Rainfall_mm"
-            ].max()
-        )
-
-        humidity = float(
-            district_data[
-                "Avg_Humidity_pct"
-            ].max()
-        )
-
-
-    # AUTO / NORMAL WEATHER
-    else:
-
-        temperature = avg_temperature
-        rainfall = avg_rainfall
-        humidity = avg_humidity
-
-
-    return (
-        temperature,
-        rainfall,
-        humidity
-    )
-
-
-# =========================================================
-# CALCULATE STRESS VALUES
-# =========================================================
-
-def calculate_stress(
-    district_data,
-    production,
-    temperature,
-    rainfall,
-    humidity
-):
-
-    # -----------------------------------------------
-    # PRODUCTION STRESS
-    # -----------------------------------------------
-
-    district_avg_production = float(
-        district_data[
-            "Production_Tonnes"
-        ].mean()
-    )
-
-    production_stress = (
-        district_avg_production - production
-    ) / district_avg_production
-
-    production_stress = float(
-        np.clip(
-            production_stress,
-            0,
-            1
-        )
-    )
-
-
-    # -----------------------------------------------
-    # TEMPERATURE STRESS
-    # -----------------------------------------------
-
-    temp_mean = float(
-        df["Avg_Temperature_C"].mean()
-    )
-
-    temp_std = float(
-        df["Avg_Temperature_C"].std()
-    )
-
-    temperature_stress = abs(
-        temperature - temp_mean
-    ) / (
-        2 * temp_std
-    )
-
-    temperature_stress = float(
-        np.clip(
-            temperature_stress,
-            0,
-            1
-        )
-    )
-
-
-    # -----------------------------------------------
-    # RAINFALL STRESS
-    # -----------------------------------------------
-
-    rain_min = float(
-        df["Total_Rainfall_mm"].min()
-    )
-
-    rain_max = float(
-        df["Total_Rainfall_mm"].max()
-    )
-
-    rainfall_stress = (
-        rainfall - rain_min
-    ) / (
-        rain_max - rain_min
-    )
-
-    rainfall_stress = float(
-        np.clip(
-            rainfall_stress,
-            0,
-            1
-        )
-    )
-
-
-    # -----------------------------------------------
-    # HUMIDITY STRESS
-    # -----------------------------------------------
-
-    humidity_min = float(
-        df["Avg_Humidity_pct"].min()
-    )
-
-    humidity_max = float(
-        df["Avg_Humidity_pct"].max()
-    )
-
-    humidity_stress = (
-        humidity - humidity_min
-    ) / (
-        humidity_max - humidity_min
-    )
-
-    humidity_stress = float(
-        np.clip(
-            humidity_stress,
-            0,
-            1
-        )
-    )
-
-
-    # -----------------------------------------------
-    # WEATHER STRESS
-    # -----------------------------------------------
-
-    weather_stress = (
-        temperature_stress
-        + rainfall_stress
-        + humidity_stress
-    ) / 3
-
-
-    return {
-
-        "production_stress":
-            round(production_stress, 3),
-
-        "temperature_stress":
-            round(temperature_stress, 3),
-
-        "rainfall_stress":
-            round(rainfall_stress, 3),
-
-        "humidity_stress":
-            round(humidity_stress, 3),
-
-        "weather_stress":
-            round(weather_stress, 3)
-    }
-
-
-# =========================================================
-# LOCAL AI RECOMMENDATION ENGINE
-# =========================================================
-# =========================================================
-# LOCAL AI RECOMMENDATION ENGINE
-# =========================================================
-
-def generate_ai_recommendations(
-    production_stress,
-    temperature_stress,
-    rainfall_stress,
-    humidity_stress,
-    weather_stress,
-    equipment_risk,
-    shortfall_risk
-):
-
-    recommendations = []
-    risk_factors = []
-
-
-    # =====================================================
-    # IDENTIFY IMPORTANT RISK FACTORS
-    # =====================================================
-
-    factors = {
-        "Production Performance": production_stress,
-        "Temperature Conditions": temperature_stress,
-        "Rainfall Conditions": rainfall_stress,
-        "Humidity Conditions": humidity_stress,
-        "Overall Weather Conditions": weather_stress,
-        "Equipment Reliability": equipment_risk / 100
-    }
-
-
-    # Sort highest risk first
-
-    sorted_factors = sorted(
-        factors.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )
-
-
-    # Keep top 3 factors
-
-    for factor, value in sorted_factors[:3]:
-
-        risk_factors.append({
-
-            "factor": factor,
-
-            "severity_score": round(
-                float(value),
-                3
-            )
-        })
-
-
-    # =====================================================
-    # PRODUCTION RECOMMENDATION
-    # =====================================================
-
-    if production_stress >= 0.4:
-
-        recommendations.append({
-
-            "priority": "High",
-
-            "issue_detected":
-                "Production Performance",
-
-            "why_it_matters":
-                (
-                    "Production is significantly below the "
-                    "expected operational level."
-                ),
-
-            "recommended_actions": [
-
-                "Identify production delays and bottlenecks.",
-
-                "Improve production scheduling.",
-
-                "Improve transportation and material handling."
-            ]
-        })
-
-
-    elif production_stress >= 0.2:
-
-        recommendations.append({
-
-            "priority": "Medium",
-
-            "issue_detected":
-                "Production Performance",
-
-            "why_it_matters":
-                (
-                    "Production performance is slightly below "
-                    "the expected level."
-                ),
-
-            "recommended_actions": [
-
-                "Monitor daily production targets.",
-
-                "Improve shift planning and machine utilization."
-            ]
-        })
-
-
-    # =====================================================
-    # EQUIPMENT RECOMMENDATION
-    # =====================================================
-
-    if equipment_risk >= 20:
-
-        recommendations.append({
-
-            "priority": "High",
-
-            "issue_detected":
-                "Equipment Reliability",
-
-            "why_it_matters":
-                (
-                    "The system detected an increased chance "
-                    "of equipment-related disruption."
-                ),
-
-            "recommended_actions": [
-
-                "Prioritize preventive maintenance.",
-
-                "Inspect critical machines before operations.",
-
-                "Monitor equipment performance regularly."
-            ]
-        })
-
-
-    elif equipment_risk >= 10:
-
-        recommendations.append({
-
-            "priority": "Medium",
-
-            "issue_detected":
-                "Equipment Monitoring",
-
-            "why_it_matters":
-                (
-                    "Some equipment may require additional "
-                    "monitoring to prevent unexpected stoppages."
-                ),
-
-            "recommended_actions": [
-
-                "Schedule routine maintenance.",
-
-                "Inspect critical machines regularly."
-            ]
-        })
-
-
-    # =====================================================
-    # TEMPERATURE RECOMMENDATION
-    # =====================================================
-
-    if temperature_stress >= 0.6:
-
-        recommendations.append({
-
-            "priority": "High",
-
-            "issue_detected":
-                "High Temperature Stress",
-
-            "why_it_matters":
-                (
-                    "High temperature may affect equipment "
-                    "performance and mining operations."
-                ),
-
-            "recommended_actions": [
-
-                "Monitor equipment temperature.",
-
-                "Schedule heat-sensitive work during suitable hours.",
-
-                "Ensure proper cooling and thermal protection."
-            ]
-        })
-
-
-    # =====================================================
-    # RAINFALL RECOMMENDATION
-    # =====================================================
-
-    if rainfall_stress >= 0.6:
-
-        recommendations.append({
-
-            "priority": "High",
-
-            "issue_detected":
-                "Heavy Rainfall Risk",
-
-            "why_it_matters":
-                (
-                    "Heavy rainfall may affect transportation "
-                    "and mining operations."
-                ),
-
-            "recommended_actions": [
-
-                "Improve mine drainage.",
-
-                "Monitor haul roads regularly.",
-
-                "Prepare backup plans for heavy rainfall."
-            ]
-        })
-
-
-    # =====================================================
-    # HUMIDITY RECOMMENDATION
-    # =====================================================
-
-    if humidity_stress >= 0.6:
-
-        recommendations.append({
-
-            "priority": "Medium",
-
-            "issue_detected":
-                "High Humidity",
-
-            "why_it_matters":
-                (
-                    "High humidity may affect equipment "
-                    "performance and increase maintenance needs."
-                ),
-
-            "recommended_actions": [
-
-                "Protect electrical equipment from moisture.",
-
-                "Inspect machines for corrosion.",
-
-                "Increase environmental monitoring."
-            ]
-        })
-
-
-    # =====================================================
-    # OVERALL WEATHER RECOMMENDATION
-    # =====================================================
-
-    if weather_stress >= 0.7:
-
-        recommendations.append({
-
-            "priority": "High",
-
-            "issue_detected":
-                "Adverse Weather Conditions",
-
-            "why_it_matters":
-                (
-                    "Combined weather conditions may create "
-                    "operational challenges."
-                ),
-
-            "recommended_actions": [
-
-                "Use weather-based operational planning.",
-
-                "Prepare alternative production schedules.",
-
-                "Increase monitoring during adverse weather."
-            ]
-        })
-
-
-    # =====================================================
-    # LOW RISK STATUS
-    # =====================================================
-
-    if shortfall_risk == "Low":
-
-        recommendations.append({
-
-            "priority": "Low",
-
-            "issue_detected":
-                "Current Operational Status",
-
-            "why_it_matters":
-                (
-                    "The overall production shortfall risk "
-                    "is currently low."
-                ),
-
-            "recommended_actions": [
-
-                "Continue regular monitoring.",
-
-                "Maintain preventive maintenance.",
-
-                "Track production and weather changes."
-            ]
-        })
-
-
-    # =====================================================
-    # GENERATE SIMPLE AI SUMMARY
-    # =====================================================
-
-    top_factor = risk_factors[0]["factor"]
-
-
-    if shortfall_risk == "High":
-
-        ai_summary = (
-            f"The system predicts a HIGH production shortfall "
-            f"risk. The main area requiring attention is "
-            f"{top_factor}. Immediate preventive action is "
-            f"recommended to reduce the possibility of "
-            f"production disruption."
-        )
-
-
-    elif shortfall_risk == "Medium":
-
-        ai_summary = (
-            f"The system predicts a MODERATE production "
-            f"shortfall risk. The main concern is "
-            f"{top_factor}. Early preventive action can help "
-            f"reduce the risk."
-        )
-
-
-    else:
-
-        ai_summary = (
-            f"The overall production shortfall risk is currently "
-            f"LOW. However, the system detected "
-            f"{top_factor} as an important operational factor. "
-            f"Regular monitoring and preventive action are "
-            f"recommended to maintain stable production."
-        )
-
-
-    # =====================================================
-    # FINAL RESULT
-    # =====================================================
-
-    return {
-
-        "current_risk":
-            shortfall_risk,
-
-        "ai_summary":
-            ai_summary,
-
-        "top_risk_factors":
-            risk_factors,
-
-        "recommendations":
-            recommendations
-    }
-def generate_gemini_recommendation(
-    state,
-    district,
-    production_risk,
-    equipment_risk,
-    weather_stress,
-    production_stress,
-    trend
-):
-    """Generate AI-based mining recommendations using Gemini."""
-
-    if gemini_client is None:
-        print("Gemini client is not available")
-        return None
-
-    try:
-        prompt = f"""
-You are an AI mining operations assistant for GeoMn, a manganese mining intelligence system.
-
-Analyze the following risk assessment and provide practical mining recommendations.
-
-Location:
-State: {state}
-District: {district}
-
-Risk Analysis:
-Production Shortfall Risk: {production_risk}%
-Equipment Breakdown Risk: {equipment_risk}%
-Weather Stress: {weather_stress}%
-Production Stress: {production_stress}%
-Production Trend: {trend}
-
-Instructions:
-1. Briefly identify the main operational concern.
-2. Give 3 to 5 practical recommendations.
-3. Prioritize recommendations based on the highest risks.
-4. Do not invent geological facts or production data.
-5. Keep the response concise and professional.
-6. Focus on actionable mining operation planning.
-
-Format the answer clearly using bullet points.
-"""
-
-        response = gemini_client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=prompt
-        )
-
-        return response.text
-
-    except Exception as e:
-        print(f"Gemini recommendation error: {e}")
-        return None
-
-
-
-# =========================================================
-# HOME
-# =========================================================
-
-@app.get("/")
-def read_root():
-    html_path = Path(__file__).parent.parent / "new_my_gpt.html"
-    return FileResponse(html_path)
-# =========================================================
-# HEALTH CHECK
-# =========================================================
-
-@app.get("/health")
-def health():
-
-    return {
-
-        "status": "healthy",
-
-        "equipment_model_loaded":
-            equipment_model is not None,
-
-        "shortfall_model_loaded":
-            shortfall_model is not None,
-
-        "metadata_loaded":
-            metadata is not None,
-
-        "dataset_loaded":
-            df is not None
-    }
-
-
-# =========================================================
-# MODEL INFORMATION
-# =========================================================
-
-@app.get("/model-info")
-def model_info():
-
-    if metadata is None:
-
-        raise HTTPException(
-            status_code=500,
-            detail="Model metadata not loaded"
-        )
-
-    return {
-
-        "metadata":
-            metadata
-    }
-
-
-# =========================================================
-# EQUIPMENT MODEL INFORMATION
-# =========================================================
-
-@app.get("/equipment-info")
-def equipment_info():
-
-    return {
-
-        "features": [
-
-            "Production_Tonnes",
-
-            "Avg_Temperature_C",
-
-            "Total_Rainfall_mm",
-
-            "Avg_Humidity_pct",
-
-            "Production_Stress",
-
-            "Temperature_Stress",
-
-            "Rainfall_Stress",
-
-            "Humidity_Stress"
-        ]
-    }
-
-
-# =========================================================
-# GET AVAILABLE STATES
-# =========================================================
-
-@app.get("/states")
-def get_states():
-
-    states = sorted(
-        df["State"]
-        .dropna()
-        .unique()
-        .tolist()
-    )
-
-    return {
-
-        "states": states
-    }
-
-
-# =========================================================
-# GET DISTRICTS
-# =========================================================
-
-@app.get("/districts/{state}")
-def get_districts(state: str):
-
-    state_data = df[
-        df["State"]
-        .str.lower()
-        .str.strip()
-        ==
-        state.lower().strip()
-    ]
-
-    if state_data.empty:
-
-        raise HTTPException(
-            status_code=404,
-            detail="State not found"
-        )
-
-    districts = sorted(
-        state_data["District"]
-        .dropna()
-        .unique()
-        .tolist()
-    )
-
-    return {
-
-        "state": state,
-
-        "districts": districts
-    }
-
-
-# =========================================================
-# MAIN PREDICTION ENDPOINT
-# =========================================================
-@app.post("/predict")
-def predict(data: PredictionInput):
-
-
-
-    # =====================================================
-    # CHECK MODELS
-    # =====================================================
-
-    if equipment_model is None:
-
-        raise HTTPException(
-            status_code=500,
-            detail="Equipment model not loaded"
-        )
-
-
-    if shortfall_model is None:
-
-        raise HTTPException(
-            status_code=500,
-            detail="Shortfall model not loaded"
-        )
-
-
-    if metadata is None:
-
-        raise HTTPException(
-            status_code=500,
-            detail="Metadata not loaded"
-        )
-
-
-    if df is None:
-
-        raise HTTPException(
-            status_code=500,
-            detail="Dataset not loaded"
-        )
-
-
-    # =====================================================
-    # FIND SELECTED DISTRICT
-    # =====================================================
-
-    district_data = df[
-
-        (
-            df["State"]
-            .str.lower()
-            .str.strip()
-            ==
-            data.state.lower().strip()
-        )
-
-        &
-
-        (
-            df["District"]
-            .str.lower()
-            .str.strip()
-            ==
-            data.district.lower().strip()
-        )
-
-    ].copy()
-
-
-    if district_data.empty:
-
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "Selected State/District "
-                "not found in dataset"
-            )
-        )
-
-
-    # =====================================================
-    # AUTOMATICALLY GET LATEST PRODUCTION DATA
-    # =====================================================
-
-    production_source = ""
-    selected_year = None
-
-
-    # Optional manual production input
-    if (
-        data.production_tonnes is not None
-        and data.production_tonnes > 0
-    ):
-
-        production = float(
-            data.production_tonnes
-        )
-
-        production_source = "Manual input"
-
-
-    else:
-
-        # ---------------------------------------------
-        # FIRST TRY: LATEST YEAR 2025-26
-        # ---------------------------------------------
-
-        latest_year_data = district_data[
-            district_data["Year"]
-            .astype(str)
-            .str.strip()
-            == "2025-26"
-        ]
-
-
-        if not latest_year_data.empty:
-
-            latest_row = latest_year_data.iloc[-1]
-
-            production = float(
-                latest_row["Production_Tonnes"]
-            )
-
-            selected_year = "2025-26"
-
-            production_source = (
-                "Automatic latest historical data"
-            )
-
-
-        # ---------------------------------------------
-        # FALLBACK: LATEST AVAILABLE RECORD
-        # ---------------------------------------------
-
-        else:
-
-            latest_row = district_data.iloc[-1]
-
-            production = float(
-                latest_row["Production_Tonnes"]
-            )
-
-            selected_year = str(
-                latest_row["Year"]
-            )
-
-            production_source = (
-                "Latest available historical data"
-            )
-
-
-    # =====================================================
-    # GET WEATHER VALUES
-    # =====================================================
-
-    (
-        temperature,
-        rainfall,
-        humidity
-    ) = get_weather_values(
-
-        district_data,
-
-        data.weather_condition
-    )
-
-
-    # =====================================================
-    # CALCULATE STRESS
-    # =====================================================
-
-    stress = calculate_stress(
-
-        district_data,
-
-        production,
-
-        temperature,
-
-        rainfall,
-
-        humidity
-    )
-
-
-    # =====================================================
-    # EQUIPMENT RISK PREDICTION
-    # =====================================================
-
-    equipment_features = pd.DataFrame(
-        [[
-
-            production,
-
-            temperature,
-
-            rainfall,
-
-            humidity,
-
-            stress[
-                "production_stress"
-            ],
-
-            stress[
-                "temperature_stress"
-            ],
-
-            stress[
-                "rainfall_stress"
-            ],
-
-            stress[
-                "humidity_stress"
-            ]
-
-        ]],
-
-        columns=[
-
-            "Production_Tonnes",
-
-            "Avg_Temperature_C",
-
-            "Total_Rainfall_mm",
-
-            "Avg_Humidity_pct",
-
-            "Production_Stress",
-
-            "Temperature_Stress",
-
-            "Rainfall_Stress",
-
-            "Humidity_Stress"
-        ]
-    )
-
-
-    equipment_risk = float(
-
-        equipment_model.predict(
-            equipment_features
-        )[0]
-
-    )
-
-
-    # Safety limit
-
-    equipment_risk = float(
-        np.clip(
-            equipment_risk,
-            0,
-            100
-        )
-    )
-
-
-    # =====================================================
-    # SHORTFALL MODEL INPUT
-    # =====================================================
-
-    shortfall_features = [
-
-        temperature,
-
-        rainfall,
-
-        humidity,
-
-        stress[
-            "temperature_stress"
-        ],
-
-        stress[
-            "rainfall_stress"
-        ],
-
-        stress[
-            "humidity_stress"
-        ],
-
-        stress[
-            "weather_stress"
-        ],
-
-        stress[
-            "production_stress"
-        ],
-
-        equipment_risk
-    ]
-
-
-    # =====================================================
-    # SHORTFALL PREDICTION
-    # =====================================================
-
-    prediction = shortfall_model.predict(
-
-        np.array(
-            [shortfall_features]
-        )
-
-    )[0]
-
-
-    prediction = int(
-        prediction
-    )
-
-
-    # =====================================================
-    # LABEL MAP
-    # =====================================================
-
-    reverse_label_map = {
-
-        0: "Low",
-
-        1: "Medium",
-
-        2: "High"
-    }
-
-
-    # Use metadata map if available
-
-    if (
-        isinstance(metadata, dict)
-        and
-        "reverse_label_map" in metadata
-    ):
-
-        reverse_label_map = {
-
-            int(k): v
-
-            for k, v in metadata[
-                "reverse_label_map"
-            ].items()
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoMn | AI & Space Tech Manganese Prospecting</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        manganese: {
+                            accent: '#a855f7',
+                            glow: '#c084fc',
+                            dark: '#0a0a0f',
+                            panel: '#12111a'
+                        }
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'scan': 'scan 2.2s linear infinite',
+                    },
+                    keyframes: {
+                        scan: {
+                            '0%': { transform: 'translateY(-100%)' },
+                            '100%': { transform: 'translateY(100%)' }
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Liquid Glassmorphism Core */
+        .glass-panel {
+            background: rgba(18, 17, 26, 0.70);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.45);
+        }
+
+        .glass-panel-interactive {
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .glass-panel-interactive:hover {
+            border-color: rgba(168, 85, 247, 0.4);
+            box-shadow: 0 12px 40px 0 rgba(168, 85, 247, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .glass-input {
+            background: rgba(0, 0, 0, 0.45);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            transition: all 0.3s ease;
+        }
+
+        /* Modern Hover Effects for Dropdown Items */
+        .dropdown-item {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+        }
+        .dropdown-item:hover {
+            background: rgba(168, 85, 247, 0.15);
+            border-color: rgba(168, 85, 247, 0.4);
+            padding-left: 1.5rem; /* Slide right effect */
+            box-shadow: inset 4px 0 0 0 rgba(168, 85, 247, 0.8);
+        }
+
+        /* Liquid Glass Shine Button Effect */
+        .btn-shine {
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        .btn-shine::after {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -60%;
+            width: 20%;
+            height: 200%;
+            opacity: 0;
+            transform: rotate(30deg);
+            background: linear-gradient(
+                to right, 
+                rgba(255, 255, 255, 0.0) 0%,
+                rgba(255, 255, 255, 0.1) 77%,
+                rgba(255, 255, 255, 0.5) 92%,
+                rgba(255, 255, 255, 0.0) 100%
+            );
+        }
+        .btn-shine:hover:not(:disabled) {
+            transform: translateY(-2px) scale(1.02);
+            box-shadow: 0 10px 25px -5px rgba(168, 85, 247, 0.5);
+        }
+        .btn-shine:hover:not(:disabled)::after {
+            opacity: 1;
+            left: 130%;
+            transition-property: left, top, opacity;
+            transition-duration: 0.7s, 0.7s, 0.15s;
+            transition-timing-function: ease-in-out;
+        }
+
+        /* Ambient Glow Backgrounds */
+        .bg-glow-purple {
+            position: absolute;
+            width: 500px;
+            height: 500px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(168, 85, 247, 0.2) 0%, rgba(0,0,0,0) 70%);
+            filter: blur(80px);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .bg-glow-blue {
+            position: absolute;
+            width: 450px;
+            height: 450px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.15) 0%, rgba(0,0,0,0) 70%);
+            filter: blur(80px);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: rgba(10, 10, 15, 0.8); }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(168, 85, 247, 0.6); }
+    </style>
+</head>
+<body class="min-h-screen text-slate-100 overflow-x-hidden">
+<div class="bg-glow-purple top-[-100px] left-[-100px]"></div><div class="bg-glow-blue bottom-[-100px] right-[-100px]"></div>
+<header class="sticky top-0 z-[100] glass-panel border-b border-white/10 px-6 py-3.5 flex items-center justify-between">
+ <div class="flex items-center gap-3"><div class="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-400"><i data-lucide="satellite" class="w-6 h-6 animate-pulse-slow"></i></div><div><div class="flex items-center gap-2"><h1 class="text-xl font-black tracking-wider bg-gradient-to-r from-white via-purple-200 to-purple-400 bg-clip-text text-transparent">GeoMn Mining Intelligence</h1><span class="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 font-semibold tracking-wide uppercase">AI / ML</span></div><p class="text-xs text-slate-400">Space, Weather & AI-Powered Manganese Production Risk Platform</p></div></div>
+ <div class="hidden md:flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-medium"><span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> AI Systems Ready</div>
+</header>
+<main class="p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 relative z-10 max-w-[1920px] mx-auto">
+<section class="lg:col-span-5 flex flex-col gap-5">
+<div class="glass-panel p-5 rounded-2xl flex flex-col gap-5 relative z-50">
+<div><div class="flex items-center justify-between"><h2 class="text-xs font-bold uppercase tracking-widest text-purple-300 flex items-center gap-2"><i data-lucide="map" class="w-4 h-4 text-purple-400"></i> 1. Select Mining Region</h2><span class="text-[10px] bg-purple-500/20 border border-purple-500/30 text-purple-300 px-2.5 py-0.5 rounded-full font-mono">16 Districts</span></div>
+<select id="stateSelect" class="glass-input mt-3 w-full rounded-xl px-4 py-3.5 text-sm text-slate-200 bg-transparent"><option value="">-- Select State --</option></select></div>
+<div class="h-px w-full bg-gradient-to-r from-transparent via-white/10 to-transparent"></div>
+<div><label class="text-xs font-medium text-slate-400 flex items-center gap-2"><i data-lucide="layers" class="w-4 h-4 text-purple-400"></i> Target Mining District</label><select id="districtSelect" disabled class="glass-input mt-3 w-full rounded-xl px-4 py-3.5 text-sm text-slate-200 bg-transparent disabled:opacity-40"><option value="">-- Select State First --</option></select></div>
+</div>
+<div class="glass-panel p-5 rounded-2xl flex flex-col gap-4 border-l-4 border-l-purple-500 glass-panel-interactive">
+<h2 class="text-xs font-bold uppercase tracking-widest text-purple-300 flex items-center gap-2"><i data-lucide="settings-2" class="w-4 h-4 text-purple-400"></i> 2. Analysis Parameters</h2>
+<div><label class="text-xs text-slate-400">Weather Condition</label><select id="weatherCondition" class="glass-input mt-2 w-full rounded-xl px-4 py-3 text-sm text-slate-200 bg-transparent"><option value="Auto">AUTO — Live Weather</option><option value="Good">GOOD — Favorable Conditions</option><option value="Normal">NORMAL — Typical Conditions</option><option value="Bad">BAD — Adverse Conditions</option><option value="Worst">WORST — Severe Conditions</option></select><p class="text-[10px] text-slate-500 mt-2">AUTO will use live weather when connected. Manual conditions support judge scenario testing.</p></div>
+<div><label class="text-xs text-slate-400">Equipment Risk Mode</label><select id="equipmentMode" class="glass-input mt-2 w-full rounded-xl px-4 py-3 text-sm text-slate-200 bg-transparent"><option value="Auto">AUTO — ML Prediction</option><option value="Low">LOW — Simulation</option><option value="Medium">MEDIUM — Simulation</option><option value="High">HIGH — Simulation</option></select><p class="text-[10px] text-slate-500 mt-2">AUTO uses the equipment-risk ML model. Manual modes support scenario simulation.</p></div>
+<div class="grid grid-cols-2 gap-3"><div class="bg-black/50 border border-white/10 p-3.5 rounded-xl"><span class="text-[10px] text-slate-400 font-semibold">LATITUDE</span><span id="latDisplay" class="block mt-1 font-mono text-base font-bold text-emerald-400">--</span></div><div class="bg-black/50 border border-white/10 p-3.5 rounded-xl"><span class="text-[10px] text-slate-400 font-semibold">LONGITUDE</span><span id="lngDisplay" class="block mt-1 font-mono text-base font-bold text-emerald-400">--</span></div></div>
+<button id="runBtn" disabled class="btn-shine w-full py-4 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-600 font-bold text-sm tracking-widest uppercase text-white shadow-lg disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2.5"><i data-lucide="play" class="w-4 h-4 fill-current"></i> Analyze Mining Risk</button>
+</div>
+<div class="glass-panel p-5 rounded-2xl flex flex-col gap-3 flex-grow min-h-[200px]"><div class="flex items-center justify-between"><h2 class="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2"><i data-lucide="terminal" class="w-4 h-4 text-purple-400"></i> AI Analysis Terminal</h2><span class="w-2 h-2 rounded-full bg-emerald-400"></span></div><div id="logConsole" class="bg-black/80 rounded-xl p-4 font-mono text-[11px] text-slate-300 space-y-2 h-44 overflow-y-auto border border-white/10"><p class="text-slate-500">[System Ready]: Select a state and mining district to begin risk analysis...</p></div></div>
+</section>
+<section class="lg:col-span-7 flex flex-col gap-5">
+<div class="glass-panel p-5 rounded-2xl relative overflow-hidden min-h-[390px] flex flex-col border border-white/10"><div class="flex items-center justify-between z-10 bg-black/40 p-3 rounded-xl backdrop-blur-md border border-white/10"><div class="flex items-center gap-3"><span class="p-2 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/30"><i data-lucide="radar" class="w-4 h-4"></i></span><div><h3 class="text-sm font-bold text-slate-100" id="mapTitle">Mining Area Intelligence View</h3><p class="text-[11px] text-slate-400" id="mapSubtitle">Environmental, weather and operational risk monitoring</p></div></div><span id="mapBadge" class="text-xs px-3 py-1 rounded-full bg-white/5 border border-white/10 text-slate-400 font-mono">Idle</span></div><div id="mapContainer" class="flex-grow flex items-center justify-center mt-4 bg-black/40 rounded-xl border border-white/5 relative overflow-hidden"><div id="mapPlaceholder" class="text-center p-8"><div class="p-4 inline-flex rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-400"><i data-lucide="globe" class="w-10 h-10 animate-pulse"></i></div><h4 class="text-sm font-semibold text-slate-300 mt-4">Awaiting Mining Region</h4><p class="text-xs text-slate-500 mt-2 max-w-sm">The backend will combine district data, weather features, equipment risk and XGBoost prediction here.</p></div></div></div>
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+<div class="glass-panel p-4 rounded-2xl"><span class="text-xs text-slate-400 font-medium flex items-center gap-2"><i data-lucide="alert-triangle" class="w-4 h-4 text-purple-400"></i> Shortfall Risk</span><div class="mt-3"><span id="shortfallVal" class="text-2xl font-black font-mono text-purple-400">--</span><p id="shortfallSub" class="text-[10px] text-slate-500 mt-1">Low / Medium / High classification</p></div></div>
+<div class="glass-panel p-4 rounded-2xl"><span class="text-xs text-slate-400 font-medium flex items-center gap-2"><i data-lucide="cpu" class="w-4 h-4 text-blue-400"></i> Equipment Risk</span><div class="mt-3"><span id="equipmentVal" class="text-2xl font-black font-mono text-blue-400">-- %</span><p id="equipmentSub" class="text-[10px] text-slate-500 mt-1">Auto ML / Manual simulation</p></div></div>
+<div class="glass-panel p-4 rounded-2xl"><span class="text-xs text-slate-400 font-medium flex items-center gap-2"><i data-lucide="cloud-rain" class="w-4 h-4 text-emerald-400"></i> Weather Stress</span><div class="mt-3"><span id="weatherVal" class="text-2xl font-black font-mono text-emerald-400">--</span><p id="weatherSub" class="text-[10px] text-slate-500 mt-1">Environmental stress indicator</p></div></div>
+</div>
+<div class="glass-panel p-5 rounded-2xl flex flex-col gap-3 glass-panel-interactive"><h3 class="text-xs font-bold uppercase tracking-widest text-slate-300 flex items-center gap-2"><i data-lucide="brain" class="w-4 h-4 text-purple-400"></i> AI Risk Analysis & Recommendation</h3><p id="reportText" class="text-xs text-slate-400 leading-relaxed italic bg-black/40 p-4 rounded-xl border border-white/5">Select a mining region. The final backend will explain the predicted production shortfall risk using production stress, equipment risk and environmental conditions.</p></div>
+</section></main>
+<script>
+lucide.createIcons();
+const regionData={"Andhra Pradesh": [{"name": "Vizianagaram", "lat": 18.30631, "lng": 83.49997}], "Karnataka": [{"name": "Ballari", "lat": 15.09, "lng": 76.55}, {"name": "Chitradurga", "lat": 14.23, "lng": 76.4}, {"name": "Davanagere", "lat": 14.47, "lng": 75.92}, {"name": "Tumakuru", "lat": 13.34, "lng": 77.1}], "Madhya Pradesh": [{"name": "Balaghat", "lat": 21.81869, "lng": 80.23573}, {"name": "Chhindwara", "lat": 22.06, "lng": 78.94}, {"name": "Jabalpur", "lat": 23.18, "lng": 79.95}, {"name": "Jhabua", "lat": 22.77, "lng": 74.59}], "Maharashtra": [{"name": "Bhandara", "lat": 21.32335, "lng": 79.75}, {"name": "Nagpur", "lat": 21.30239, "lng": 79.32317}], "Odisha": [{"name": "Keonjhar", "lat": 22.07, "lng": 85.406}, {"name": "Rayagada", "lat": 19.21667, "lng": 83.21667}, {"name": "Sundargarh", "lat": 22.12333, "lng": 84.02667}], "Rajasthan": [{"name": "Banswara", "lat": 23.55, "lng": 74.45}], "Telangana": [{"name": "Adilabad", "lat": 19.65732, "lng": 78.53032}]};
+const stateSelect=document.getElementById('stateSelect'), districtSelect=document.getElementById('districtSelect'), runBtn=document.getElementById('runBtn');
+const logConsole=document.getElementById('logConsole');
+Object.keys(regionData).sort().forEach(s=>stateSelect.add(new Option(s,s)));
+function log(msg,cls='text-slate-300'){const p=document.createElement('p');p.className=cls;p.textContent='> '+msg;logConsole.appendChild(p);logConsole.scrollTop=logConsole.scrollHeight;}
+stateSelect.addEventListener('change',()=>{districtSelect.innerHTML=''; districtSelect.add(new Option('-- Select District --','')); const arr=regionData[stateSelect.value]||[]; arr.forEach(d=>districtSelect.add(new Option(d.name,d.name))); districtSelect.disabled=!stateSelect.value; runBtn.disabled=true; document.getElementById('latDisplay').textContent='--';document.getElementById('lngDisplay').textContent='--';logConsole.innerHTML=''; if(stateSelect.value) log('State selected: '+stateSelect.value,'text-purple-300');});
+districtSelect.addEventListener('change',()=>{const d=(regionData[stateSelect.value]||[]).find(x=>x.name===districtSelect.value); if(!d) return; document.getElementById('latDisplay').textContent=d.lat.toFixed(4)+'° N';document.getElementById('lngDisplay').textContent=d.lng.toFixed(4)+'° E';runBtn.disabled=false;log('District selected: '+d.name,'text-emerald-300');log('Coordinates loaded automatically.','text-slate-400');});
+runBtn.addEventListener('click', async () => {
+
+    const state = stateSelect.value;
+    const district = districtSelect.value;
+
+    const weather = document
+        .getElementById('weatherCondition')
+        .value
+        .toLowerCase();
+
+    const equipmentMode = document
+        .getElementById('equipmentMode')
+        .value;
+
+
+    log(
+        'Connecting to GeoMn AI backend...',
+        'text-purple-300'
+    );
+
+    log(
+        'Sending mining region and weather data...',
+        'text-slate-400'
+    );
+
+
+    try {
+
+        // ==========================================
+        // CALL FASTAPI BACKEND
+        // ==========================================
+
+        const response = await fetch(
+
+            'predict',
+
+            {
+
+                method: 'POST',
+
+                headers: {
+
+                    'Content-Type': 'application/json'
+
+                },
+
+                body: JSON.stringify({
+
+                    state: state,
+
+                    district: district,
+
+                    weather_condition: weather
+
+                })
+
+            }
+
+        );
+
+
+        // ==========================================
+        // CHECK BACKEND RESPONSE
+        // ==========================================
+
+        if (!response.ok) {
+
+            throw new Error(
+                'Backend returned error: ' +
+                response.status
+            );
 
         }
 
 
-    shortfall_risk = (
-        reverse_label_map.get(
-            prediction,
-            "Unknown"
-        )
-    )
+        const result = await response.json();
 
 
-    # =====================================================
-    # GENERATE AI RECOMMENDATIONS
-    # =====================================================
-
-    ai_recommendations = generate_ai_recommendations(
-
-        production_stress=stress[
-            "production_stress"
-        ],
-
-        temperature_stress=stress[
-            "temperature_stress"
-        ],
-
-        rainfall_stress=stress[
-            "rainfall_stress"
-        ],
-
-        humidity_stress=stress[
-            "humidity_stress"
-        ],
-
-        weather_stress=stress[
-            "weather_stress"
-        ],
-
-        equipment_risk=equipment_risk,
-
-        shortfall_risk=shortfall_risk
-    )
-    # =====================================================
-    # GENERATE OPENAI RECOMMENDATION
-    # =====================================================
-    ai_recommendation = generate_gemini_recommendation(
-
-        state=data.state,
-
-        district=data.district,
-
-        production_risk=shortfall_risk,
-
-        equipment_risk=round(equipment_risk, 2),
-
-        weather_stress=round(
-            stress["weather_stress"], 2
-        ),
-
-        production_stress=round(
-            stress["production_stress"], 2
-         ),
-
-       trend=production_source
-    )
-    
-    print("Gemini recommendation generated:", ai_recommendation)
-
-# =====================================================
-# OPENAI FALLBACK STATUS
-# =====================================================
-
-    if ai_recommendation:
-
-        recommendation_source = "OpenAI AI Recommendation"
-
-    else:
-
-        recommendation_source = (
-            "GeoMn Rule-Based Recommendation "
-             "(Offline Fallback)"
-        )
-
-    # =====================================================
-    # FINAL RESPONSE
-    # =====================================================
-
-    return {
-
-        "state":
-            data.state,
-
-        "district":
-            data.district,
+        console.log(
+            'Backend Result:',
+            result
+        );
 
 
-        # Internal production information
+        // ==========================================
+        // SHORTFALL RISK
+        // ==========================================
 
-        "production_used": {
-
-            "production_tonnes":
-                round(
-                    production,
-                    2
-                ),
-
-            "year":
-                selected_year,
-
-            "source":
-                production_source
-        },
+        document.getElementById(
+            'shortfallVal'
+        ).textContent =
+            result.production_shortfall_risk || '--';
 
 
-        "weather_condition":
-            data.weather_condition,
+        // ==========================================
+        // EQUIPMENT RISK
+        // ==========================================
+
+        let equipmentRisk =
+            result.equipment_breakdown_risk_percent;
 
 
-        "weather_values": {
+        // Simulation modes
 
-            "temperature_c":
-                round(
-                    temperature,
-                    2
-                ),
+        if (equipmentMode === 'Low') {
 
-            "rainfall_mm":
-                round(
-                    rainfall,
-                    2
-                ),
+            equipmentRisk = 10;
 
-            "humidity_percent":
-                round(
-                    humidity,
-                    2
-                )
-        },
+        }
 
+        else if (equipmentMode === 'Medium') {
 
-        "stress_analysis":
-            stress,
+            equipmentRisk = 50;
+
+        }
+
+        else if (equipmentMode === 'High') {
+
+            equipmentRisk = 85;
+
+        }
 
 
-        "equipment_breakdown_risk_percent":
-            round(
-                equipment_risk,
-                2
-            ),
+      
+
+        // ==========================================
+        // WEATHER STRESS
+        // ==========================================
+
+        document.getElementById(
+            'weatherVal'
+        ).textContent =
+            result.stress_analysis
+                ? result.stress_analysis.weather_stress
+                : '--';
 
 
-        "production_shortfall_risk":
-            shortfall_risk,
+        // ==========================================
+        // UPDATE MINING INTELLIGENCE PANEL
+        // ==========================================
+
+        document.getElementById(
+            'mapTitle'
+        ).textContent =
+            district + ' Mining Intelligence';
 
 
-        "ai_recommendations":
-            ai_recommendations,
-        "ai_recommendation":
-            ai_recommendation,
+        document.getElementById(
+            'mapSubtitle'
+        ).textContent =
+            'AI/ML production risk analysis completed';
 
-        "recommendation_source":
-            recommendation_source
+
+        document.getElementById(
+            'mapBadge'
+        ).textContent =
+            'COMPLETE';
+
+
+        document.getElementById(
+            'mapBadge'
+        ).className =
+            'text-xs px-3 py-1 rounded-full ' +
+            'bg-emerald-500/10 ' +
+            'border border-emerald-500/30 ' +
+            'text-emerald-400 font-mono';
+
+
+        // ==========================================
+        // UPDATE MAP / ANALYSIS AREA
+        // ==========================================
+
+        const production =
+            result.production_used
+                ? result.production_used.production_tonnes
+                : '--';
+
+
+        const year =
+            result.production_used
+                ? result.production_used.year
+                : '--';
+
+
+        const temperature =
+            result.weather_values
+                ? result.weather_values.temperature_c
+                : '--';
+
+
+        const rainfall =
+            result.weather_values
+                ? result.weather_values.rainfall_mm
+                : '--';
+
+
+        document.getElementById(
+            'mapPlaceholder'
+        ).innerHTML = `
+
+            <div class="w-full h-full p-6">
+
+                <div class="text-center mb-5">
+
+                    <div class="p-3 inline-flex rounded-full
+                        bg-purple-500/10
+                        border border-purple-500/30
+                        text-purple-400">
+
+                        <i data-lucide="activity"
+                           class="w-8 h-8"></i>
+
+                    </div>
+
+                    <h4 class="text-lg font-bold
+                        text-slate-200 mt-3">
+
+                        ${district} Mining Analysis
+
+                    </h4>
+
+                </div>
+
+
+                <div class="grid grid-cols-2 gap-3
+                    max-w-md mx-auto">
+
+                    <div class="bg-black/50
+                        border border-white/10
+                        rounded-xl p-4">
+
+                        <p class="text-[10px]
+                            text-slate-400">
+
+                            PRODUCTION
+
+                        </p>
+
+                        <p class="text-purple-300
+                            font-bold mt-1">
+
+                            ${Number(production)
+                                .toLocaleString()}
+                            Tonnes
+
+                        </p>
+
+                    </div>
+
+
+                    <div class="bg-black/50
+                        border border-white/10
+                        rounded-xl p-4">
+
+                        <p class="text-[10px]
+                            text-slate-400">
+
+                            DATA YEAR
+
+                        </p>
+
+                        <p class="text-purple-300
+                            font-bold mt-1">
+
+                            ${year}
+
+                        </p>
+
+                    </div>
+
+
+                    <div class="bg-black/50
+                        border border-white/10
+                        rounded-xl p-4">
+
+                        <p class="text-[10px]
+                            text-slate-400">
+
+                            TEMPERATURE
+
+                        </p>
+
+                        <p class="text-orange-300
+                            font-bold mt-1">
+
+                            ${temperature} °C
+
+                        </p>
+
+                    </div>
+
+
+                    <div class="bg-black/50
+                        border border-white/10
+                        rounded-xl p-4">
+
+                        <p class="text-[10px]
+                            text-slate-400">
+
+                            RAINFALL
+
+                        </p>
+
+                        <p class="text-blue-300
+                            font-bold mt-1">
+
+                            ${rainfall} mm
+
+                        </p>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        `;
+
+
+        // ==========================================
+        // AI RECOMMENDATIONS
+        // ==========================================
+
+        
+
+
+// ==========================================
+// UPDATE RISK CARDS AGAIN
+// ==========================================
+
+// SHORTFALL RISK
+
+const shortfallElement =
+    document.getElementById('shortfallVal');
+
+if (shortfallElement) {
+
+    shortfallElement.textContent =
+        result.production_shortfall_risk || '--';
+
+}
+
+
+// EQUIPMENT RISK
+
+const equipmentElement =
+    document.getElementById('equipmentVal');
+
+if (equipmentElement) {
+
+    equipmentElement.textContent =
+        Number(
+            result.equipment_breakdown_risk_percent || 0
+        ).toFixed(2) + ' %';
+
+}
+
+
+// WEATHER STRESS
+
+const weatherElement =
+    document.getElementById('weatherVal');
+
+if (
+    weatherElement &&
+    result.stress_analysis
+) {
+
+    weatherElement.textContent =
+        Number(
+            result.stress_analysis.weather_stress || 0
+        ).toFixed(3);
+
+}
+
+
+// ==========================================
+// AI RECOMMENDATIONS
+// ==========================================
+
+let report = '';
+
+
+// AI PREDICTION
+
+report +=
+    'AI Prediction: ' +
+    (result.production_shortfall_risk || 'Unknown') +
+    ' production shortfall risk.\n\n';
+
+
+// ==========================================
+// MAIN RISK FACTORS
+// ==========================================
+// ==========================================
+// OPENAI OR RULE-BASED RECOMMENDATIONS
+// ==========================================
+
+const aiRecommendation =
+    result.ai_recommendation;
+
+
+// ==========================================
+// OPENAI RECOMMENDATION
+// ==========================================
+
+if (aiRecommendation) {
+
+    report +=
+        '\nAI-Powered Recommendation:\n\n' +
+        aiRecommendation +
+        '\n';
+
+}
+
+
+// ==========================================
+// OFFLINE RULE-BASED FALLBACK
+// ==========================================
+
+else {
+
+    // ==========================================
+    // MAIN RISK FACTORS
+    // ==========================================
+
+    const factors =
+        result.ai_recommendations
+            ?.top_risk_factors;
+
+
+    if (Array.isArray(factors) && factors.length > 0) {
+
+        report += 'Main Risk Factors:\n';
+
+
+        factors.forEach((item, index) => {
+
+            const factorName =
+                item.factor ||
+                item.name ||
+                item.risk_factor ||
+                'Environmental Risk';
+
+
+            const score =
+                item.severity_score ??
+                item.score ??
+                item.risk_score ??
+                0;
+
+
+            report +=
+                (index + 1) +
+                '. ' +
+                factorName +
+                ' (Risk Level: ' +
+                Math.round(Number(score) * 100) +
+                '%)\n';
+
+        });
+
     }
+
+
+    // ==========================================
+    // RECOMMENDED ACTIONS
+    // ==========================================
+
+    const recommendations =
+        result.ai_recommendations
+            ?.recommendations;
+
+
+    if (
+        Array.isArray(recommendations) &&
+        recommendations.length > 0
+    ) {
+
+        report += '\nRecommended Actions:\n';
+
+
+        recommendations.forEach((rec, index) => {
+
+
+            const factor =
+                rec.factor ||
+                rec.title ||
+                rec.category ||
+                rec.name ||
+                'Recommended Action';
+
+
+            const reason =
+                rec.reason ||
+                rec.description ||
+                rec.message ||
+                rec.explanation ||
+                'This area should be monitored based on the current risk analysis.';
+
+
+            report +=
+                '\n' +
+                (index + 1) +
+                '. ' +
+                factor +
+                '\n';
+
+
+            report +=
+                'Why: ' +
+                reason +
+                '\n';
+
+
+            const actions =
+                rec.actions ||
+                rec.recommended_actions ||
+                rec.action_steps;
+
+
+            if (
+                Array.isArray(actions) &&
+                actions.length > 0
+            ) {
+
+                actions.forEach(action => {
+
+                    report +=
+                        '• ' +
+                        action +
+                        '\n';
+
+                });
+
+            }
+
+        });
+
+    }
+
+    else {
+
+        report +=
+            '\nRecommended Actions:\n' +
+            '• Continue regular monitoring of mining operations.\n' +
+            '• Monitor weather conditions before major operations.\n' +
+            '• Follow preventive equipment maintenance schedules.\n';
+
+    }
+
+}
+
+
+
+// ==========================================
+// DISPLAY AI REPORT
+// ==========================================
+
+const reportElement =
+    document.getElementById('reportText');
+
+
+if (reportElement) {
+
+    reportElement.textContent = report;
+
+    reportElement.style.whiteSpace =
+        'pre-line';
+
+}
+
+
+        // ==========================================
+        // SUCCESS LOG
+        // ==========================================
+
+        log(
+            'AI analysis completed successfully!',
+            'text-emerald-400'
+        );
+
+
+        log(
+            'Risk factors and recommendations generated.',
+            'text-emerald-300'
+        );
+
+
+        lucide.createIcons();
+
+
+    }
+
+    catch (error) {
+
+        console.error(error);
+
+
+        log(
+
+            'Backend Error: ' +
+            error.message,
+
+            'text-red-400'
+
+        );
+
+    }
+
+});
+</script></body></html>
