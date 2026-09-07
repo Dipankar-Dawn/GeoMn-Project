@@ -10,3 +10,4 @@ python-dotenv
 earthengine-api
 geemap
 folium
+earthengine
