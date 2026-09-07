@@ -868,7 +868,7 @@ Format the answer clearly using bullet points.
 @app.get("/")
 def read_root():
     html_path = Path(__file__).parent / "my_gpt.html"
-    return FileResponse(html_path,media type="text/html")
+    return FileResponse(html_path,media_type="text/html")
 # =========================================================
 # HEALTH CHECK
 # =========================================================
