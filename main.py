@@ -61,20 +61,19 @@ DATA_PATH = (
     / "final_manganese_ml_dataset.csv"
 )
 
-MODELS_DIR = BASE_DIR / "models"
 
 EQUIPMENT_MODEL_PATH = (
-    MODELS_DIR
+    BASE_DIR
     / "equipment_risk_model.pkl"
 )
 
 SHORTFALL_MODEL_PATH = (
-    MODELS_DIR
+    BASE_DIR
     / "production_shortfall_xgboost_model.json"
 )
 
 METADATA_PATH = (
-    MODELS_DIR
+    BASE_DIR
     / "production_shortfall_model_metadata.pkl"
 )
 
