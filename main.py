@@ -1,27 +1,41 @@
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
 from pathlib import Path
 import os
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from dotenv import load_dotenv
+from google import genai
 
 import pandas as pd
 import numpy as np
 import joblib
 import xgboost as xgb
 
-
 # =========================================================
 # FASTAPI APP
 # =========================================================
 
+# Load Gemini API key from .env file
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(env_path)
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+gemini_client = (
+    genai.Client(api_key=GEMINI_API_KEY)
+    if GEMINI_API_KEY
+    else None
+)
+
+print("Gemini API key found:", bool(GEMINI_API_KEY))
+print("Gemini client initialized:", gemini_client is not None)
 app = FastAPI(
     title="GeoMn Mining Risk API",
     description="AI/ML based Manganese Mining Risk Prediction System"
 )
-
-
 # =========================================================
 # CORS
 # =========================================================
@@ -47,7 +61,7 @@ DATA_PATH = (
     / "final_manganese_ml_dataset.csv"
 )
 
-MODELS_DIR = BASE_DIR
+MODELS_DIR = BASE_DIR / "models"
 
 EQUIPMENT_MODEL_PATH = (
     MODELS_DIR
@@ -64,18 +78,21 @@ METADATA_PATH = (
     / "production_shortfall_model_metadata.pkl"
 )
 
-HTML_FILE_PATH = BASE_DIR / "my_gpt.html"
-
 
 # =========================================================
 # LOAD DATASET
 # =========================================================
 
 try:
+
     df = pd.read_csv(DATA_PATH)
+
     print("✓ Historical dataset loaded successfully")
+
 except Exception as e:
+
     df = None
+
     print("✗ DATASET ERROR:")
     print(e)
 
@@ -85,12 +102,17 @@ except Exception as e:
 # =========================================================
 
 try:
+
     equipment_model = joblib.load(
         EQUIPMENT_MODEL_PATH
     )
+
     print("✓ Equipment risk model loaded successfully")
+
 except Exception as e:
+
     equipment_model = None
+
     print("✗ EQUIPMENT MODEL ERROR:")
     print(e)
 
@@ -100,13 +122,21 @@ except Exception as e:
 # =========================================================
 
 try:
+
     shortfall_model = xgb.XGBClassifier()
+
     shortfall_model.load_model(
         SHORTFALL_MODEL_PATH
     )
-    print("✓ Production shortfall XGBoost model loaded successfully")
+
+    print(
+        "✓ Production shortfall XGBoost model loaded successfully"
+    )
+
 except Exception as e:
+
     shortfall_model = None
+
     print("✗ SHORTFALL MODEL ERROR:")
     print(e)
 
@@ -116,12 +146,17 @@ except Exception as e:
 # =========================================================
 
 try:
+
     metadata = joblib.load(
         METADATA_PATH
     )
+
     print("✓ Model metadata loaded successfully")
+
 except Exception as e:
+
     metadata = None
+
     print("✗ METADATA ERROR:")
     print(e)
 
@@ -131,9 +166,13 @@ except Exception as e:
 # =========================================================
 
 class PredictionInput(BaseModel):
+
     state: str
+
     district: str
+
     weather_condition: str
+
     # Optional for future simulation mode
     production_tonnes: float | None = None
 
@@ -146,6 +185,7 @@ def get_weather_values(
     district_data,
     weather_condition
 ):
+
     weather_condition = (
         weather_condition.lower().strip()
     )
@@ -163,47 +203,80 @@ def get_weather_values(
         district_data["Avg_Humidity_pct"].mean()
     )
 
+
     # GOOD WEATHER
     if weather_condition == "good":
+
         temperature = float(
-            district_data["Avg_Temperature_C"].quantile(0.25)
+            district_data[
+                "Avg_Temperature_C"
+            ].quantile(0.25)
         )
+
         rainfall = float(
-            district_data["Total_Rainfall_mm"].quantile(0.25)
+            district_data[
+                "Total_Rainfall_mm"
+            ].quantile(0.25)
         )
+
         humidity = float(
-            district_data["Avg_Humidity_pct"].quantile(0.25)
+            district_data[
+                "Avg_Humidity_pct"
+            ].quantile(0.25)
         )
+
 
     # BAD WEATHER
     elif weather_condition == "bad":
+
         temperature = float(
-            district_data["Avg_Temperature_C"].quantile(0.75)
+            district_data[
+                "Avg_Temperature_C"
+            ].quantile(0.75)
         )
+
         rainfall = float(
-            district_data["Total_Rainfall_mm"].quantile(0.75)
+            district_data[
+                "Total_Rainfall_mm"
+            ].quantile(0.75)
         )
+
         humidity = float(
-            district_data["Avg_Humidity_pct"].quantile(0.75)
+            district_data[
+                "Avg_Humidity_pct"
+            ].quantile(0.75)
         )
+
 
     # WORST WEATHER
     elif weather_condition == "worst":
+
         temperature = float(
-            district_data["Avg_Temperature_C"].max()
+            district_data[
+                "Avg_Temperature_C"
+            ].max()
         )
+
         rainfall = float(
-            district_data["Total_Rainfall_mm"].max()
+            district_data[
+                "Total_Rainfall_mm"
+            ].max()
         )
+
         humidity = float(
-            district_data["Avg_Humidity_pct"].max()
+            district_data[
+                "Avg_Humidity_pct"
+            ].max()
         )
+
 
     # AUTO / NORMAL WEATHER
     else:
+
         temperature = avg_temperature
         rainfall = avg_rainfall
         humidity = avg_humidity
+
 
     return (
         temperature,
@@ -223,13 +296,21 @@ def calculate_stress(
     rainfall,
     humidity
 ):
-    # Production Stress
+
+    # -----------------------------------------------
+    # PRODUCTION STRESS
+    # -----------------------------------------------
+
     district_avg_production = float(
-        district_data["Production_Tonnes"].mean()
+        district_data[
+            "Production_Tonnes"
+        ].mean()
     )
+
     production_stress = (
         district_avg_production - production
     ) / district_avg_production
+
     production_stress = float(
         np.clip(
             production_stress,
@@ -238,18 +319,25 @@ def calculate_stress(
         )
     )
 
-    # Temperature Stress
+
+    # -----------------------------------------------
+    # TEMPERATURE STRESS
+    # -----------------------------------------------
+
     temp_mean = float(
         df["Avg_Temperature_C"].mean()
     )
+
     temp_std = float(
         df["Avg_Temperature_C"].std()
     )
+
     temperature_stress = abs(
         temperature - temp_mean
     ) / (
         2 * temp_std
     )
+
     temperature_stress = float(
         np.clip(
             temperature_stress,
@@ -258,18 +346,25 @@ def calculate_stress(
         )
     )
 
-    # Rainfall Stress
+
+    # -----------------------------------------------
+    # RAINFALL STRESS
+    # -----------------------------------------------
+
     rain_min = float(
         df["Total_Rainfall_mm"].min()
     )
+
     rain_max = float(
         df["Total_Rainfall_mm"].max()
     )
+
     rainfall_stress = (
         rainfall - rain_min
     ) / (
         rain_max - rain_min
     )
+
     rainfall_stress = float(
         np.clip(
             rainfall_stress,
@@ -278,18 +373,25 @@ def calculate_stress(
         )
     )
 
-    # Humidity Stress
+
+    # -----------------------------------------------
+    # HUMIDITY STRESS
+    # -----------------------------------------------
+
     humidity_min = float(
         df["Avg_Humidity_pct"].min()
     )
+
     humidity_max = float(
         df["Avg_Humidity_pct"].max()
     )
+
     humidity_stress = (
         humidity - humidity_min
     ) / (
         humidity_max - humidity_min
     )
+
     humidity_stress = float(
         np.clip(
             humidity_stress,
@@ -298,22 +400,40 @@ def calculate_stress(
         )
     )
 
-    # Weather Stress
+
+    # -----------------------------------------------
+    # WEATHER STRESS
+    # -----------------------------------------------
+
     weather_stress = (
         temperature_stress
         + rainfall_stress
         + humidity_stress
     ) / 3
 
+
     return {
-        "production_stress": round(production_stress, 3),
-        "temperature_stress": round(temperature_stress, 3),
-        "rainfall_stress": round(rainfall_stress, 3),
-        "humidity_stress": round(humidity_stress, 3),
-        "weather_stress": round(weather_stress, 3)
+
+        "production_stress":
+            round(production_stress, 3),
+
+        "temperature_stress":
+            round(temperature_stress, 3),
+
+        "rainfall_stress":
+            round(rainfall_stress, 3),
+
+        "humidity_stress":
+            round(humidity_stress, 3),
+
+        "weather_stress":
+            round(weather_stress, 3)
     }
 
 
+# =========================================================
+# LOCAL AI RECOMMENDATION ENGINE
+# =========================================================
 # =========================================================
 # LOCAL AI RECOMMENDATION ENGINE
 # =========================================================
@@ -327,10 +447,15 @@ def generate_ai_recommendations(
     equipment_risk,
     shortfall_risk
 ):
+
     recommendations = []
     risk_factors = []
 
-    # Identify Important Risk Factors
+
+    # =====================================================
+    # IDENTIFY IMPORTANT RISK FACTORS
+    # =====================================================
+
     factors = {
         "Production Performance": production_stress,
         "Temperature Conditions": temperature_stress,
@@ -340,183 +465,432 @@ def generate_ai_recommendations(
         "Equipment Reliability": equipment_risk / 100
     }
 
+
+    # Sort highest risk first
+
     sorted_factors = sorted(
         factors.items(),
         key=lambda x: x[1],
         reverse=True
     )
 
+
+    # Keep top 3 factors
+
     for factor, value in sorted_factors[:3]:
+
         risk_factors.append({
+
             "factor": factor,
-            "severity_score": round(float(value), 3)
+
+            "severity_score": round(
+                float(value),
+                3
+            )
         })
 
-    # Production Recommendation
+
+    # =====================================================
+    # PRODUCTION RECOMMENDATION
+    # =====================================================
+
     if production_stress >= 0.4:
+
         recommendations.append({
+
             "priority": "High",
-            "issue_detected": "Production Performance",
-            "why_it_matters": "Production is significantly below the expected operational level.",
+
+            "issue_detected":
+                "Production Performance",
+
+            "why_it_matters":
+                (
+                    "Production is significantly below the "
+                    "expected operational level."
+                ),
+
             "recommended_actions": [
+
                 "Identify production delays and bottlenecks.",
+
                 "Improve production scheduling.",
+
                 "Improve transportation and material handling."
             ]
         })
+
+
     elif production_stress >= 0.2:
+
         recommendations.append({
+
             "priority": "Medium",
-            "issue_detected": "Production Performance",
-            "why_it_matters": "Production performance is slightly below the expected level.",
+
+            "issue_detected":
+                "Production Performance",
+
+            "why_it_matters":
+                (
+                    "Production performance is slightly below "
+                    "the expected level."
+                ),
+
             "recommended_actions": [
+
                 "Monitor daily production targets.",
+
                 "Improve shift planning and machine utilization."
             ]
         })
 
-    # Equipment Recommendation
+
+    # =====================================================
+    # EQUIPMENT RECOMMENDATION
+    # =====================================================
+
     if equipment_risk >= 20:
+
         recommendations.append({
+
             "priority": "High",
-            "issue_detected": "Equipment Reliability",
-            "why_it_matters": "The system detected an increased chance of equipment-related disruption.",
+
+            "issue_detected":
+                "Equipment Reliability",
+
+            "why_it_matters":
+                (
+                    "The system detected an increased chance "
+                    "of equipment-related disruption."
+                ),
+
             "recommended_actions": [
+
                 "Prioritize preventive maintenance.",
+
                 "Inspect critical machines before operations.",
+
                 "Monitor equipment performance regularly."
             ]
         })
+
+
     elif equipment_risk >= 10:
+
         recommendations.append({
+
             "priority": "Medium",
-            "issue_detected": "Equipment Monitoring",
-            "why_it_matters": "Some equipment may require additional monitoring to prevent unexpected stoppages.",
+
+            "issue_detected":
+                "Equipment Monitoring",
+
+            "why_it_matters":
+                (
+                    "Some equipment may require additional "
+                    "monitoring to prevent unexpected stoppages."
+                ),
+
             "recommended_actions": [
+
                 "Schedule routine maintenance.",
+
                 "Inspect critical machines regularly."
             ]
         })
 
-    # Temperature Recommendation
+
+    # =====================================================
+    # TEMPERATURE RECOMMENDATION
+    # =====================================================
+
     if temperature_stress >= 0.6:
+
         recommendations.append({
+
             "priority": "High",
-            "issue_detected": "High Temperature Stress",
-            "why_it_matters": "High temperature may affect equipment performance and mining operations.",
+
+            "issue_detected":
+                "High Temperature Stress",
+
+            "why_it_matters":
+                (
+                    "High temperature may affect equipment "
+                    "performance and mining operations."
+                ),
+
             "recommended_actions": [
+
                 "Monitor equipment temperature.",
+
                 "Schedule heat-sensitive work during suitable hours.",
+
                 "Ensure proper cooling and thermal protection."
             ]
         })
 
-    # Rainfall Recommendation
+
+    # =====================================================
+    # RAINFALL RECOMMENDATION
+    # =====================================================
+
     if rainfall_stress >= 0.6:
+
         recommendations.append({
+
             "priority": "High",
-            "issue_detected": "Heavy Rainfall Risk",
-            "why_it_matters": "Heavy rainfall may affect transportation and mining operations.",
+
+            "issue_detected":
+                "Heavy Rainfall Risk",
+
+            "why_it_matters":
+                (
+                    "Heavy rainfall may affect transportation "
+                    "and mining operations."
+                ),
+
             "recommended_actions": [
+
                 "Improve mine drainage.",
+
                 "Monitor haul roads regularly.",
+
                 "Prepare backup plans for heavy rainfall."
             ]
         })
 
-    # Humidity Recommendation
+
+    # =====================================================
+    # HUMIDITY RECOMMENDATION
+    # =====================================================
+
     if humidity_stress >= 0.6:
+
         recommendations.append({
+
             "priority": "Medium",
-            "issue_detected": "High Humidity",
-            "why_it_matters": "High humidity may affect equipment performance and increase maintenance needs.",
+
+            "issue_detected":
+                "High Humidity",
+
+            "why_it_matters":
+                (
+                    "High humidity may affect equipment "
+                    "performance and increase maintenance needs."
+                ),
+
             "recommended_actions": [
+
                 "Protect electrical equipment from moisture.",
+
                 "Inspect machines for corrosion.",
+
                 "Increase environmental monitoring."
             ]
         })
 
-    # Overall Weather Recommendation
+
+    # =====================================================
+    # OVERALL WEATHER RECOMMENDATION
+    # =====================================================
+
     if weather_stress >= 0.7:
+
         recommendations.append({
+
             "priority": "High",
-            "issue_detected": "Adverse Weather Conditions",
-            "why_it_matters": "Combined weather conditions may create operational challenges.",
+
+            "issue_detected":
+                "Adverse Weather Conditions",
+
+            "why_it_matters":
+                (
+                    "Combined weather conditions may create "
+                    "operational challenges."
+                ),
+
             "recommended_actions": [
+
                 "Use weather-based operational planning.",
+
                 "Prepare alternative production schedules.",
+
                 "Increase monitoring during adverse weather."
             ]
         })
 
-    # Low Risk Status
+
+    # =====================================================
+    # LOW RISK STATUS
+    # =====================================================
+
     if shortfall_risk == "Low":
+
         recommendations.append({
+
             "priority": "Low",
-            "issue_detected": "Current Operational Status",
-            "why_it_matters": "The overall production shortfall risk is currently low.",
+
+            "issue_detected":
+                "Current Operational Status",
+
+            "why_it_matters":
+                (
+                    "The overall production shortfall risk "
+                    "is currently low."
+                ),
+
             "recommended_actions": [
+
                 "Continue regular monitoring.",
+
                 "Maintain preventive maintenance.",
+
                 "Track production and weather changes."
             ]
         })
 
-    # Generate Simple AI Summary
+
+    # =====================================================
+    # GENERATE SIMPLE AI SUMMARY
+    # =====================================================
+
     top_factor = risk_factors[0]["factor"]
 
+
     if shortfall_risk == "High":
+
         ai_summary = (
-            f"The system predicts a HIGH production shortfall risk. "
-            f"The main area requiring attention is {top_factor}. "
-            f"Immediate preventive action is recommended to reduce "
-            f"the possibility of production disruption."
-        )
-    elif shortfall_risk == "Medium":
-        ai_summary = (
-            f"The system predicts a MODERATE production shortfall risk. "
-            f"The main concern is {top_factor}. Early preventive action "
-            f"can help reduce the risk."
-        )
-    else:
-        ai_summary = (
-            f"The overall production shortfall risk is currently LOW. "
-            f"However, the system detected {top_factor} as an important "
-            f"operational factor. Regular monitoring and preventive action "
-            f"are recommended to maintain stable production."
+            f"The system predicts a HIGH production shortfall "
+            f"risk. The main area requiring attention is "
+            f"{top_factor}. Immediate preventive action is "
+            f"recommended to reduce the possibility of "
+            f"production disruption."
         )
 
+
+    elif shortfall_risk == "Medium":
+
+        ai_summary = (
+            f"The system predicts a MODERATE production "
+            f"shortfall risk. The main concern is "
+            f"{top_factor}. Early preventive action can help "
+            f"reduce the risk."
+        )
+
+
+    else:
+
+        ai_summary = (
+            f"The overall production shortfall risk is currently "
+            f"LOW. However, the system detected "
+            f"{top_factor} as an important operational factor. "
+            f"Regular monitoring and preventive action are "
+            f"recommended to maintain stable production."
+        )
+
+
+    # =====================================================
+    # FINAL RESULT
+    # =====================================================
+
     return {
-        "current_risk": shortfall_risk,
-        "ai_summary": ai_summary,
-        "top_risk_factors": risk_factors,
-        "recommendations": recommendations
+
+        "current_risk":
+            shortfall_risk,
+
+        "ai_summary":
+            ai_summary,
+
+        "top_risk_factors":
+            risk_factors,
+
+        "recommendations":
+            recommendations
     }
+def generate_gemini_recommendation(
+    state,
+    district,
+    production_risk,
+    equipment_risk,
+    weather_stress,
+    production_stress,
+    trend
+):
+    """Generate AI-based mining recommendations using Gemini."""
+
+    if gemini_client is None:
+        print("Gemini client is not available")
+        return None
+
+    try:
+        prompt = f"""
+You are an AI mining operations assistant for GeoMn, a manganese mining intelligence system.
+
+Analyze the following risk assessment and provide practical mining recommendations.
+
+Location:
+State: {state}
+District: {district}
+
+Risk Analysis:
+Production Shortfall Risk: {production_risk}%
+Equipment Breakdown Risk: {equipment_risk}%
+Weather Stress: {weather_stress}%
+Production Stress: {production_stress}%
+Production Trend: {trend}
+
+Instructions:
+1. Briefly identify the main operational concern.
+2. Give 3 to 5 practical recommendations.
+3. Prioritize recommendations based on the highest risks.
+4. Do not invent geological facts or production data.
+5. Keep the response concise and professional.
+6. Focus on actionable mining operation planning.
+
+Format the answer clearly using bullet points.
+"""
+
+        response = gemini_client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt
+        )
+
+        return response.text
+
+    except Exception as e:
+        print(f"Gemini recommendation error: {e}")
+        return None
+
 
 
 # =========================================================
-# ROOT (SERVE HTML)
+# HOME
 # =========================================================
 
 @app.get("/")
 def read_root():
-    html_path = Path(__file__).parent / "my_gpt.html"
+    html_path = Path(__file__).parent.parent / "new_my_gpt.html"
     return FileResponse(html_path)
-
-
 # =========================================================
 # HEALTH CHECK
 # =========================================================
 
 @app.get("/health")
 def health():
+
     return {
+
         "status": "healthy",
-        "equipment_model_loaded": equipment_model is not None,
-        "shortfall_model_loaded": shortfall_model is not None,
-        "metadata_loaded": metadata is not None,
-        "dataset_loaded": df is not None
+
+        "equipment_model_loaded":
+            equipment_model is not None,
+
+        "shortfall_model_loaded":
+            shortfall_model is not None,
+
+        "metadata_loaded":
+            metadata is not None,
+
+        "dataset_loaded":
+            df is not None
     }
 
 
@@ -526,12 +900,19 @@ def health():
 
 @app.get("/model-info")
 def model_info():
+
     if metadata is None:
+
         raise HTTPException(
             status_code=500,
             detail="Model metadata not loaded"
         )
-    return {"metadata": metadata}
+
+    return {
+
+        "metadata":
+            metadata
+    }
 
 
 # =========================================================
@@ -540,15 +921,25 @@ def model_info():
 
 @app.get("/equipment-info")
 def equipment_info():
+
     return {
+
         "features": [
+
             "Production_Tonnes",
+
             "Avg_Temperature_C",
+
             "Total_Rainfall_mm",
+
             "Avg_Humidity_pct",
+
             "Production_Stress",
+
             "Temperature_Stress",
+
             "Rainfall_Stress",
+
             "Humidity_Stress"
         ]
     }
@@ -560,8 +951,6 @@ def equipment_info():
 
 @app.get("/states")
 def get_states():
-    if df is None:
-        raise HTTPException(status_code=500, detail="Dataset not loaded")
 
     states = sorted(
         df["State"]
@@ -569,7 +958,11 @@ def get_states():
         .unique()
         .tolist()
     )
-    return {"states": states}
+
+    return {
+
+        "states": states
+    }
 
 
 # =========================================================
@@ -578,17 +971,17 @@ def get_states():
 
 @app.get("/districts/{state}")
 def get_districts(state: str):
-    if df is None:
-        raise HTTPException(status_code=500, detail="Dataset not loaded")
 
     state_data = df[
         df["State"]
         .str.lower()
         .str.strip()
-        == state.lower().strip()
+        ==
+        state.lower().strip()
     ]
 
     if state_data.empty:
+
         raise HTTPException(
             status_code=404,
             detail="State not found"
@@ -602,7 +995,9 @@ def get_districts(state: str):
     )
 
     return {
+
         "state": state,
+
         "districts": districts
     }
 
@@ -610,146 +1005,507 @@ def get_districts(state: str):
 # =========================================================
 # MAIN PREDICTION ENDPOINT
 # =========================================================
-
 @app.post("/predict")
 def predict(data: PredictionInput):
 
-    # Check Models
+
+
+    # =====================================================
+    # CHECK MODELS
+    # =====================================================
+
     if equipment_model is None:
-        raise HTTPException(status_code=500, detail="Equipment model not loaded")
-    if shortfall_model is None:
-        raise HTTPException(status_code=500, detail="Shortfall model not loaded")
-    if metadata is None:
-        raise HTTPException(status_code=500, detail="Metadata not loaded")
-    if df is None:
-        raise HTTPException(status_code=500, detail="Dataset not loaded")
 
-    # Find Selected District
-    district_data = df[
-        (df["State"].str.lower().str.strip() == data.state.lower().strip()) &
-        (df["District"].str.lower().str.strip() == data.district.lower().strip())
-    ].copy()
-
-    if district_data.empty:
         raise HTTPException(
-            status_code=404,
-            detail="Selected State/District not found in dataset"
+            status_code=500,
+            detail="Equipment model not loaded"
         )
 
-    # Get Production Data
+
+    if shortfall_model is None:
+
+        raise HTTPException(
+            status_code=500,
+            detail="Shortfall model not loaded"
+        )
+
+
+    if metadata is None:
+
+        raise HTTPException(
+            status_code=500,
+            detail="Metadata not loaded"
+        )
+
+
+    if df is None:
+
+        raise HTTPException(
+            status_code=500,
+            detail="Dataset not loaded"
+        )
+
+
+    # =====================================================
+    # FIND SELECTED DISTRICT
+    # =====================================================
+
+    district_data = df[
+
+        (
+            df["State"]
+            .str.lower()
+            .str.strip()
+            ==
+            data.state.lower().strip()
+        )
+
+        &
+
+        (
+            df["District"]
+            .str.lower()
+            .str.strip()
+            ==
+            data.district.lower().strip()
+        )
+
+    ].copy()
+
+
+    if district_data.empty:
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Selected State/District "
+                "not found in dataset"
+            )
+        )
+
+
+    # =====================================================
+    # AUTOMATICALLY GET LATEST PRODUCTION DATA
+    # =====================================================
+
     production_source = ""
     selected_year = None
 
-    if data.production_tonnes is not None and data.production_tonnes > 0:
-        production = float(data.production_tonnes)
+
+    # Optional manual production input
+    if (
+        data.production_tonnes is not None
+        and data.production_tonnes > 0
+    ):
+
+        production = float(
+            data.production_tonnes
+        )
+
         production_source = "Manual input"
+
+
     else:
+
+        # ---------------------------------------------
+        # FIRST TRY: LATEST YEAR 2025-26
+        # ---------------------------------------------
+
         latest_year_data = district_data[
-            district_data["Year"].astype(str).str.strip() == "2025-26"
+            district_data["Year"]
+            .astype(str)
+            .str.strip()
+            == "2025-26"
         ]
 
+
         if not latest_year_data.empty:
+
             latest_row = latest_year_data.iloc[-1]
-            production = float(latest_row["Production_Tonnes"])
+
+            production = float(
+                latest_row["Production_Tonnes"]
+            )
+
             selected_year = "2025-26"
-            production_source = "Automatic latest historical data"
+
+            production_source = (
+                "Automatic latest historical data"
+            )
+
+
+        # ---------------------------------------------
+        # FALLBACK: LATEST AVAILABLE RECORD
+        # ---------------------------------------------
+
         else:
+
             latest_row = district_data.iloc[-1]
-            production = float(latest_row["Production_Tonnes"])
-            selected_year = str(latest_row["Year"])
-            production_source = "Latest available historical data"
 
-    # Get Weather Values & Calculate Stress
-    temperature, rainfall, humidity = get_weather_values(
-        district_data,
-        data.weather_condition
-    )
+            production = float(
+                latest_row["Production_Tonnes"]
+            )
 
-    stress = calculate_stress(
-        district_data,
-        production,
+            selected_year = str(
+                latest_row["Year"]
+            )
+
+            production_source = (
+                "Latest available historical data"
+            )
+
+
+    # =====================================================
+    # GET WEATHER VALUES
+    # =====================================================
+
+    (
         temperature,
         rainfall,
         humidity
+    ) = get_weather_values(
+
+        district_data,
+
+        data.weather_condition
     )
 
-    # Equipment Risk Prediction
+
+    # =====================================================
+    # CALCULATE STRESS
+    # =====================================================
+
+    stress = calculate_stress(
+
+        district_data,
+
+        production,
+
+        temperature,
+
+        rainfall,
+
+        humidity
+    )
+
+
+    # =====================================================
+    # EQUIPMENT RISK PREDICTION
+    # =====================================================
+
     equipment_features = pd.DataFrame(
         [[
+
             production,
+
             temperature,
+
             rainfall,
+
             humidity,
-            stress["production_stress"],
-            stress["temperature_stress"],
-            stress["rainfall_stress"],
-            stress["humidity_stress"]
+
+            stress[
+                "production_stress"
+            ],
+
+            stress[
+                "temperature_stress"
+            ],
+
+            stress[
+                "rainfall_stress"
+            ],
+
+            stress[
+                "humidity_stress"
+            ]
+
         ]],
+
         columns=[
+
             "Production_Tonnes",
+
             "Avg_Temperature_C",
+
             "Total_Rainfall_mm",
+
             "Avg_Humidity_pct",
+
             "Production_Stress",
+
             "Temperature_Stress",
+
             "Rainfall_Stress",
+
             "Humidity_Stress"
         ]
     )
 
-    equipment_risk = float(equipment_model.predict(equipment_features)[0])
-    equipment_risk = float(np.clip(equipment_risk, 0, 100))
 
-    # Shortfall Model Input & Prediction
+    equipment_risk = float(
+
+        equipment_model.predict(
+            equipment_features
+        )[0]
+
+    )
+
+
+    # Safety limit
+
+    equipment_risk = float(
+        np.clip(
+            equipment_risk,
+            0,
+            100
+        )
+    )
+
+
+    # =====================================================
+    # SHORTFALL MODEL INPUT
+    # =====================================================
+
     shortfall_features = [
+
         temperature,
+
         rainfall,
+
         humidity,
-        stress["temperature_stress"],
-        stress["rainfall_stress"],
-        stress["humidity_stress"],
-        stress["weather_stress"],
-        stress["production_stress"],
+
+        stress[
+            "temperature_stress"
+        ],
+
+        stress[
+            "rainfall_stress"
+        ],
+
+        stress[
+            "humidity_stress"
+        ],
+
+        stress[
+            "weather_stress"
+        ],
+
+        stress[
+            "production_stress"
+        ],
+
         equipment_risk
     ]
 
-    prediction = int(shortfall_model.predict(np.array([shortfall_features]))[0])
 
-    reverse_label_map = {0: "Low", 1: "Medium", 2: "High"}
-    if isinstance(metadata, dict) and "reverse_label_map" in metadata:
-        reverse_label_map = {
-            int(k): v for k, v in metadata["reverse_label_map"].items()
-        }
+    # =====================================================
+    # SHORTFALL PREDICTION
+    # =====================================================
 
-    shortfall_risk = reverse_label_map.get(prediction, "Unknown")
+    prediction = shortfall_model.predict(
 
-    # Recommendations
-    ai_recommendations = generate_ai_recommendations(
-        production_stress=stress["production_stress"],
-        temperature_stress=stress["temperature_stress"],
-        rainfall_stress=stress["rainfall_stress"],
-        humidity_stress=stress["humidity_stress"],
-        weather_stress=stress["weather_stress"],
-        equipment_risk=equipment_risk,
-        shortfall_risk=shortfall_risk
+        np.array(
+            [shortfall_features]
+        )
+
+    )[0]
+
+
+    prediction = int(
+        prediction
     )
 
+
+    # =====================================================
+    # LABEL MAP
+    # =====================================================
+
+    reverse_label_map = {
+
+        0: "Low",
+
+        1: "Medium",
+
+        2: "High"
+    }
+
+
+    # Use metadata map if available
+
+    if (
+        isinstance(metadata, dict)
+        and
+        "reverse_label_map" in metadata
+    ):
+
+        reverse_label_map = {
+
+            int(k): v
+
+            for k, v in metadata[
+                "reverse_label_map"
+            ].items()
+
+        }
+
+
+    shortfall_risk = (
+        reverse_label_map.get(
+            prediction,
+            "Unknown"
+        )
+    )
+
+
+    # =====================================================
+    # GENERATE AI RECOMMENDATIONS
+    # =====================================================
+
+    ai_recommendations = generate_ai_recommendations(
+
+        production_stress=stress[
+            "production_stress"
+        ],
+
+        temperature_stress=stress[
+            "temperature_stress"
+        ],
+
+        rainfall_stress=stress[
+            "rainfall_stress"
+        ],
+
+        humidity_stress=stress[
+            "humidity_stress"
+        ],
+
+        weather_stress=stress[
+            "weather_stress"
+        ],
+
+        equipment_risk=equipment_risk,
+
+        shortfall_risk=shortfall_risk
+    )
+    # =====================================================
+    # GENERATE OPENAI RECOMMENDATION
+    # =====================================================
+    ai_recommendation = generate_gemini_recommendation(
+
+        state=data.state,
+
+        district=data.district,
+
+        production_risk=shortfall_risk,
+
+        equipment_risk=round(equipment_risk, 2),
+
+        weather_stress=round(
+            stress["weather_stress"], 2
+        ),
+
+        production_stress=round(
+            stress["production_stress"], 2
+         ),
+
+       trend=production_source
+    )
+    
+    print("Gemini recommendation generated:", ai_recommendation)
+
+# =====================================================
+# OPENAI FALLBACK STATUS
+# =====================================================
+
+    if ai_recommendation:
+
+        recommendation_source = "OpenAI AI Recommendation"
+
+    else:
+
+        recommendation_source = (
+            "GeoMn Rule-Based Recommendation "
+             "(Offline Fallback)"
+        )
+
+    # =====================================================
+    # FINAL RESPONSE
+    # =====================================================
+
     return {
-        "state": data.state,
-        "district": data.district,
+
+        "state":
+            data.state,
+
+        "district":
+            data.district,
+
+
+        # Internal production information
+
         "production_used": {
-            "production_tonnes": round(production, 2),
-            "year": selected_year,
-            "source": production_source
+
+            "production_tonnes":
+                round(
+                    production,
+                    2
+                ),
+
+            "year":
+                selected_year,
+
+            "source":
+                production_source
         },
-        "weather_condition": data.weather_condition,
+
+
+        "weather_condition":
+            data.weather_condition,
+
+
         "weather_values": {
-            "temperature_c": round(temperature, 2),
-            "rainfall_mm": round(rainfall, 2),
-            "humidity_percent": round(humidity, 2)
+
+            "temperature_c":
+                round(
+                    temperature,
+                    2
+                ),
+
+            "rainfall_mm":
+                round(
+                    rainfall,
+                    2
+                ),
+
+            "humidity_percent":
+                round(
+                    humidity,
+                    2
+                )
         },
-        "stress_analysis": stress,
-        "equipment_breakdown_risk_percent": round(equipment_risk, 2),
-        "production_shortfall_risk": shortfall_risk,
-        "ai_recommendations": ai_recommendations
+
+
+        "stress_analysis":
+            stress,
+
+
+        "equipment_breakdown_risk_percent":
+            round(
+                equipment_risk,
+                2
+            ),
+
+
+        "production_shortfall_risk":
+            shortfall_risk,
+
+
+        "ai_recommendations":
+            ai_recommendations,
+        "ai_recommendation":
+            ai_recommendation,
+
+        "recommendation_source":
+            recommendation_source
     }
