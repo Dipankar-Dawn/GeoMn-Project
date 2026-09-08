@@ -1,7 +1,25 @@
+import os
 import ee
 import geemap
 
-ee.Initialize(project="moilai")
+EE_PROJECT = "moilai"
+EE_KEY_FILE = "/etc/secrets/earthengine-service-account.json"
+
+if os.path.exists(EE_KEY_FILE):
+    # Render / production
+    credentials = ee.ServiceAccountCredentials(
+        None,
+        key_file=EE_KEY_FILE
+    )
+    ee.Initialize(
+        credentials=credentials,
+        project=EE_PROJECT
+    )
+    print("Earth Engine initialized using service account.")
+else:
+    # Local development
+    ee.Initialize(project=EE_PROJECT)
+    print("Earth Engine initialized using local credentials.")
 
 #print("Earth Engine ready!")
 
