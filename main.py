@@ -6,7 +6,7 @@ import json
 import requests
 from pathlib import Path
 import os
-
+import ee
 from dotenv import load_dotenv
 from google import genai
 
