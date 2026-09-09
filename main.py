@@ -507,6 +507,55 @@ def calculate_stress(
 # LOCAL AI RECOMMENDATION ENGINE
 # =========================================================
 
+# =========================================================
+# FIXED: WEATHER SCENARIO FUNCTION
+# =========================================================
+
+def get_weather_values(
+    district_data,
+    weather_condition,
+    state=None,
+    district=None
+):
+    weather_condition = weather_condition.lower().strip()
+
+    avg_temperature = float(district_data["Avg_Temperature_C"].mean())
+    avg_rainfall = float(district_data["Total_Rainfall_mm"].mean())
+    avg_humidity = float(district_data["Avg_Humidity_pct"].mean())
+
+    if weather_condition == "auto":
+        try:
+            return get_live_weather(state, district)
+        except Exception:
+            print("⚠ Live weather unavailable. Using offline district data.")
+            return avg_temperature, avg_rainfall, avg_humidity
+
+    if weather_condition == "good":
+        return (
+            float(district_data["Avg_Temperature_C"].quantile(0.25)),
+            float(district_data["Total_Rainfall_mm"].quantile(0.25)),
+            float(district_data["Avg_Humidity_pct"].quantile(0.25))
+        )
+    elif weather_condition == "bad":
+        return (
+            float(district_data["Avg_Temperature_C"].quantile(0.75)),
+            float(district_data["Total_Rainfall_mm"].quantile(0.75)),
+            float(district_data["Avg_Humidity_pct"].quantile(0.75))
+        )
+    elif weather_condition == "worst":
+        return (
+            float(district_data["Avg_Temperature_C"].max()),
+            float(district_data["Total_Rainfall_mm"].max()),
+            float(district_data["Avg_Humidity_pct"].max())
+        )
+
+    return avg_temperature, avg_rainfall, avg_humidity
+
+
+# =========================================================
+# DYNAMIC MULTI-TIER LOCAL AI RECOMMENDATION ENGINE
+# =========================================================
+
 def generate_ai_recommendations(
     production_stress,
     temperature_stress,
@@ -516,280 +565,252 @@ def generate_ai_recommendations(
     equipment_risk,
     shortfall_risk
 ):
-
     recommendations = []
     risk_factors = []
 
-
+    # Map all stress parameters with numerical values
     factors = {
         "Production Performance": production_stress,
         "Temperature Conditions": temperature_stress,
         "Rainfall Conditions": rainfall_stress,
         "Humidity Conditions": humidity_stress,
-        "Overall Weather Conditions": weather_stress,
-        "Equipment Reliability": equipment_risk / 100
+        "Overall Weather Stress": weather_stress,
+        "Equipment Reliability": equipment_risk / 100.0
     }
 
-
+    # Sort factors by severity
     sorted_factors = sorted(
         factors.items(),
         key=lambda x: x[1],
         reverse=True
     )
 
-
     for factor, value in sorted_factors[:3]:
-
         risk_factors.append({
-
             "factor": factor,
-
-            "severity_score":
-                round(float(value), 3)
+            "severity_score": round(float(value), 3)
         })
 
+    # =========================================================
+    # 1. PRODUCTION STRESS (5 GRANULAR TIERS)
+    # =========================================================
+    prod_pct = int(production_stress * 100)
 
-    if production_stress >= 0.4:
-
+    if production_stress >= 0.75:
         recommendations.append({
-
-            "priority": "High",
-
-            "issue_detected":
-                "Production Performance",
-
-            "why_it_matters":
-                "Production is significantly below the expected operational level.",
-
+            "priority": "Critical",
+            "title": "Severe Production Deficit Emergency",
+            "issue_detected": "Critical Production Drop",
+            "why_it_matters": f"Production stress reached a critical level of {prod_pct}%. Tonnage is drastically below target baseline.",
             "recommended_actions": [
-
-                "Identify production delays and bottlenecks.",
-
-                "Improve production scheduling.",
-
-                "Improve transportation and material handling."
+                "Halt non-essential operations and perform an immediate throughput audit.",
+                "Deploy emergency haul fleet capacity to resolve primary pit bottlenecks.",
+                "Re-evaluate daily target allocations with plant managers immediately."
             ]
         })
-
-
-    elif production_stress >= 0.2:
-
+    elif production_stress >= 0.50:
         recommendations.append({
-
+            "priority": "High",
+            "title": "Substantial Yield Reduction",
+            "issue_detected": "High Production Stress",
+            "why_it_matters": f"Production stress is at {prod_pct}%, indicating significant lagging in pit-to-surface transport.",
+            "recommended_actions": [
+                "Audit primary crusher throughput to identify feed rate delays.",
+                "Optimize haul truck dispatch cycles and minimize idle queuing times.",
+                "Adjust shift handovers to eliminate operational downtime gaps."
+            ]
+        })
+    elif production_stress >= 0.30:
+        recommendations.append({
+            "priority": "Medium-High",
+            "title": "Moderate Production Shortfall",
+            "issue_detected": "Moderate Output Variance",
+            "why_it_matters": f"Production stress measured at {prod_pct}%. Tonnage is falling behind daily schedule quotas.",
+            "recommended_actions": [
+                "Increase monitoring of hourly excavator loading targets.",
+                "Streamline internal pit traffic to prevent transport delays."
+            ]
+        })
+    elif production_stress >= 0.15:
+        recommendations.append({
             "priority": "Medium",
-
-            "issue_detected":
-                "Production Performance",
-
-            "why_it_matters":
-                "Production performance is slightly below the expected level.",
-
+            "title": "Minor Tonnage Variance",
+            "issue_detected": "Slight Production Deficit",
+            "why_it_matters": f"Production stress is slightly elevated at {prod_pct}%. Small operational friction detected.",
             "recommended_actions": [
-
-                "Monitor daily production targets.",
-
-                "Improve shift planning and machine utilization."
+                "Track shift-wise output targets against weekly averages.",
+                "Ensure maximum machine availability during peak operation hours."
             ]
         })
 
+    # =========================================================
+    # 2. HUMIDITY STRESS (4 TIERS)
+    # =========================================================
+    hum_pct = int(humidity_stress * 100)
 
-    if equipment_risk >= 20:
-
+    if humidity_stress >= 0.80:
         recommendations.append({
-
+            "priority": "Critical",
+            "title": "Extreme Humidity & Saturation Protocol",
+            "issue_detected": "Severe Moisture Hazard",
+            "why_it_matters": f"Humidity stress reached {hum_pct}%. Severe moisture risk for high-voltage systems and screening units.",
+            "recommended_actions": [
+                "Enforce IP65 electrical enclosure seals and deploy industrial desiccants.",
+                "Run anti-clogging routines on damp ore screening decks immediately.",
+                "Inspect motor insulation resistance across all dewatering pumps."
+            ]
+        })
+    elif humidity_stress >= 0.55:
+        recommendations.append({
             "priority": "High",
-
-            "issue_detected":
-                "Equipment Reliability",
-
-            "why_it_matters":
-                "The system detected an increased chance of equipment-related disruption.",
-
+            "title": "High Moisture & Material Clogging Risk",
+            "issue_detected": "Elevated Humidity Level",
+            "why_it_matters": f"Humidity stress measured at {hum_pct}%, creating potential wet ore blinding on conveyor belts.",
             "recommended_actions": [
-
-                "Prioritize preventive maintenance.",
-
-                "Inspect critical machines before operations.",
-
-                "Monitor equipment performance regularly."
+                "Inspect conveyor transfer chutes regularly for sticky manganese buildup.",
+                "Check moisture traps on pneumatic lines and air compressors."
             ]
         })
-
-
-    elif equipment_risk >= 10:
-
+    elif humidity_stress >= 0.35:
         recommendations.append({
-
             "priority": "Medium",
-
-            "issue_detected":
-                "Equipment Monitoring",
-
-            "why_it_matters":
-                "Some equipment may require additional monitoring.",
-
+            "title": "Moderate Humidity Dampness",
+            "issue_detected": "Moderate Environmental Moisture",
+            "why_it_matters": f"Humidity stress is at {hum_pct}%. Minor moisture impact expected on outdoor machinery.",
             "recommended_actions": [
-
-                "Schedule routine maintenance.",
-
-                "Inspect critical machines regularly."
+                "Conduct routine checks on exposed electrical control boxes.",
+                "Apply anti-corrosive lubricants to exposed moving components."
             ]
         })
 
+    # =========================================================
+    # 3. RAINFALL STRESS (4 TIERS)
+    # =========================================================
+    rain_pct = int(rainfall_stress * 100)
 
-    if temperature_stress >= 0.6:
-
+    if rainfall_stress >= 0.75:
         recommendations.append({
-
+            "priority": "Critical",
+            "title": "Flash Inundation & Slope Hazard",
+            "issue_detected": "Extreme Rainfall Impact",
+            "why_it_matters": f"Rainfall stress index is at {rain_pct}%. High risk of pit floor flooding and bench instability.",
+            "recommended_actions": [
+                "Activate main stage high-volume pit dewatering pumps.",
+                "Restrict heavy haulage along unpaved pit ramps and slippery inclines.",
+                "Monitor slope stability sensors along high pit walls."
+            ]
+        })
+    elif rainfall_stress >= 0.45:
+        recommendations.append({
             "priority": "High",
-
-            "issue_detected":
-                "High Temperature Stress",
-
-            "why_it_matters":
-                "High temperature may affect equipment performance and mining operations.",
-
+            "title": "Haul Road Degradation Risk",
+            "issue_detected": "Substantial Rainfall",
+            "why_it_matters": f"Rainfall stress measured at {rain_pct}%, causing erosion along haul routes.",
             "recommended_actions": [
-
-                "Monitor equipment temperature.",
-
-                "Schedule heat-sensitive work during suitable hours.",
-
-                "Ensure proper cooling and thermal protection."
+                "Apply coarse gravel to soft patches on primary haul roads.",
+                "Clear roadside drainage ditches to clear runoff water rapidly."
             ]
         })
-
-
-    if rainfall_stress >= 0.6:
-
+    elif rainfall_stress >= 0.20:
         recommendations.append({
-
-            "priority": "High",
-
-            "issue_detected":
-                "Heavy Rainfall Risk",
-
-            "why_it_matters":
-                "Heavy rainfall may affect transportation and mining operations.",
-
-            "recommended_actions": [
-
-                "Improve mine drainage.",
-
-                "Monitor haul roads regularly.",
-
-                "Prepare backup plans for heavy rainfall."
-            ]
-        })
-
-
-    if humidity_stress >= 0.6:
-
-        recommendations.append({
-
             "priority": "Medium",
-
-            "issue_detected":
-                "High Humidity",
-
-            "why_it_matters":
-                "High humidity may affect equipment performance.",
-
+            "title": "Light Precipitation Impact",
+            "issue_detected": "Low to Moderate Rain",
+            "why_it_matters": f"Rainfall stress index is {rain_pct}%. Surface slipperiness may slightly slow transport.",
             "recommended_actions": [
-
-                "Protect electrical equipment from moisture.",
-
-                "Inspect machines for corrosion.",
-
-                "Increase environmental monitoring."
+                "Enforce strict speed limits for loaded haul trucks."
             ]
         })
 
+    # =========================================================
+    # 4. TEMPERATURE STRESS (4 TIERS)
+    # =========================================================
+    temp_pct = int(temperature_stress * 100)
 
-    if weather_stress >= 0.7:
-
+    if temperature_stress >= 0.75:
         recommendations.append({
-
             "priority": "High",
-
-            "issue_detected":
-                "Adverse Weather Conditions",
-
-            "why_it_matters":
-                "Combined weather conditions may create operational challenges.",
-
+            "title": "Extreme Thermal Overheating Risk",
+            "issue_detected": "Severe Temperature Stress",
+            "why_it_matters": f"Temperature stress reached {temp_pct}%. Heavy engine overheating risk for excavators.",
             "recommended_actions": [
-
-                "Use weather-based operational planning.",
-
-                "Prepare alternative production schedules.",
-
-                "Increase monitoring during adverse weather."
+                "Inspect radiator airflow and coolant levels during shift changes.",
+                "Schedule high-demand earthmoving during morning hours."
+            ]
+        })
+    elif temperature_stress >= 0.45:
+        recommendations.append({
+            "priority": "Medium",
+            "title": "Elevated Engine Temperature",
+            "issue_detected": "Moderate Heat Stress",
+            "why_it_matters": f"Temperature stress measured at {temp_pct}%. Engine oil breakdown rates increase.",
+            "recommended_actions": [
+                "Monitor hydraulic fluid temperature gauges continuously."
             ]
         })
 
-
-    if shortfall_risk == "Low":
-
+    # =========================================================
+    # 5. EQUIPMENT RISK (4 TIERS)
+    # =========================================================
+    if equipment_risk >= 60.0:
         recommendations.append({
+            "priority": "Critical",
+            "title": "Imminent Breakdown Warning",
+            "issue_detected": "Critical Equipment Failure Risk",
+            "why_it_matters": f"Predicted breakdown risk is at {round(equipment_risk, 1)}%. High risk of unplanned line stoppage.",
+            "recommended_actions": [
+                "Pull high-risk machinery for emergency diagnostic inspection.",
+                "Prepare standby units for rapid field replacement."
+            ]
+        })
+    elif equipment_risk >= 30.0:
+        recommendations.append({
+            "priority": "High",
+            "title": "High Wear & Mechanical Fatigue",
+            "issue_detected": "Elevated Equipment Risk",
+            "why_it_matters": f"Equipment breakdown risk measured at {round(equipment_risk, 1)}%.",
+            "recommended_actions": [
+                "Perform preventive lubrication and hydraulic filter replacement."
+            ]
+        })
+    elif equipment_risk >= 15.0:
+        recommendations.append({
+            "priority": "Medium",
+            "title": "Routine Wear Monitoring",
+            "issue_detected": "Moderate Mechanical Stress",
+            "why_it_matters": f"Equipment breakdown risk is at {round(equipment_risk, 1)}%.",
+            "recommended_actions": [
+                "Perform scheduled start-of-shift mechanical inspections."
+            ]
+        })
 
+    # Fallback if no specific thresholds triggered
+    if not recommendations:
+        recommendations.append({
             "priority": "Low",
-
-            "issue_detected":
-                "Current Operational Status",
-
-            "why_it_matters":
-                "The overall production shortfall risk is currently low.",
-
+            "title": "Stable Baseline Operations",
+            "issue_detected": "Normal Operational Parameters",
+            "why_it_matters": "All measured stress indices are operating within safe baseline limits.",
             "recommended_actions": [
-
-                "Continue regular monitoring.",
-
-                "Maintain preventive maintenance.",
-
-                "Track production and weather changes."
+                "Maintain standard daily operational routines and safety monitoring."
             ]
         })
 
-
-    top_factor = risk_factors[0]["factor"]
-
+    top_factor = risk_factors[0]["factor"] if risk_factors else "Operational Parameters"
 
     if shortfall_risk == "High":
-
-        ai_summary = (
-            f"The system predicts a HIGH production shortfall risk. "
-            f"The main area requiring attention is {top_factor}."
-        )
-
-
+        ai_summary = f"CRITICAL: System predicts a HIGH production shortfall risk. Primary driver is {top_factor}."
     elif shortfall_risk == "Medium":
-
-        ai_summary = (
-            f"The system predicts a MODERATE production shortfall risk. "
-            f"The main concern is {top_factor}."
-        )
-
-
+        ai_summary = f"WARNING: System predicts a MODERATE production shortfall risk. Primary area of focus is {top_factor}."
     else:
-
-        ai_summary = (
-            f"The overall production shortfall risk is currently LOW. "
-            f"However, {top_factor} requires regular monitoring."
-        )
-
+        ai_summary = f"STABLE: Overall production shortfall risk is LOW. Continue monitoring {top_factor}."
 
     return {
-
         "current_risk": shortfall_risk,
-
         "ai_summary": ai_summary,
-
         "top_risk_factors": risk_factors,
-
         "recommendations": recommendations
     }
-
 
 # =========================================================
 # GEMINI AI RECOMMENDATION
