@@ -2,10 +2,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-
+import json
+import requests
 from pathlib import Path
 import os
-
+import ee
 from dotenv import load_dotenv
 from google import genai
 
@@ -172,6 +173,7 @@ class PredictionInput(BaseModel):
     state: str
     district: str
     weather_condition: str
+    equipment_mode: str = "Auto"
     production_tonnes: float | None = None
 # =========================================================
 # SENTINEL MAP REQUEST MODEL
@@ -186,14 +188,132 @@ class MapRequest(BaseModel):
     east: float
 
     north: float
+# =========================================================
+# LIVE WEATHER FROM OPEN-METEO
+# =========================================================
 
+def get_live_weather(state, district):
+
+    try:
+
+        # -------------------------------------------------
+        # STEP 1: Convert district name to coordinates
+        # -------------------------------------------------
+
+        geocode_url = "https://geocoding-api.open-meteo.com/v1/search"
+
+        geocode_params = {
+            "name": f"{district}, {state}",
+            "count": 10,
+            "language": "en",
+            "format": "json",
+            "countryCode": "IN"
+        }
+
+        geocode_response = requests.get(
+            geocode_url,
+            params=geocode_params,
+            timeout=10
+        )
+
+        geocode_response.raise_for_status()
+
+        geocode_data = geocode_response.json()
+
+        results = geocode_data.get("results", [])
+
+        if not results:
+            raise Exception(
+                f"Location not found: {district}, {state}"
+            )
+
+        location = results[0]
+
+        latitude = float(location["latitude"])
+        longitude = float(location["longitude"])
+
+        # -------------------------------------------------
+        # STEP 2: Get live weather
+        # -------------------------------------------------
+
+        weather_url = "https://api.open-meteo.com/v1/forecast"
+
+        weather_params = {
+            "latitude": latitude,
+            "longitude": longitude,
+            "current": (
+                "temperature_2m,"
+                "relative_humidity_2m,"
+                "precipitation"
+            ),
+            "timezone": "auto"
+        }
+
+        weather_response = requests.get(
+            weather_url,
+            params=weather_params,
+            timeout=10
+        )
+
+        weather_response.raise_for_status()
+
+        weather_data = weather_response.json()
+
+        current = weather_data.get("current", {})
+
+        temperature = float(
+            current.get("temperature_2m", 0)
+        )
+
+        humidity = float(
+            current.get("relative_humidity_2m", 0)
+        )
+
+        rainfall = float(
+            current.get("precipitation", 0)
+        )
+
+        print(
+            f"✓ Live weather: "
+            f"{district}, {state} | "
+            f"Temperature={temperature}°C | "
+            f"Rainfall={rainfall} mm | "
+            f"Humidity={humidity}%"
+        )
+
+        return (
+            temperature,
+            rainfall,
+            humidity
+        )
+
+    except Exception as e:
+
+        print("✗ LIVE WEATHER ERROR:")
+        print(e)
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to fetch live weather: {str(e)}"
+        )
 # =========================================================
 # WEATHER SCENARIO FUNCTION
 # =========================================================
 
-def get_weather_values(district_data, weather_condition):
+def get_weather_values(
+    district_data,
+    weather_condition,
+    state=None,
+    district=None
+):
 
     weather_condition = weather_condition.lower().strip()
+    if weather_condition == "auto":
+
+        return get_live_weather(
+            state,
+            district
+        )
 
     avg_temperature = float(
         district_data["Avg_Temperature_C"].mean()
@@ -206,7 +326,25 @@ def get_weather_values(district_data, weather_condition):
     avg_humidity = float(
         district_data["Avg_Humidity_pct"].mean()
     )
+    if weather_condition == "auto":
 
+        try:
+            return get_live_weather(
+                state,
+                district
+            )
+
+        except Exception:
+            print(
+                "⚠ Live weather unavailable."
+                " Using offline district data."
+            )
+
+            return (
+                avg_temperature,
+                avg_rainfall,
+                avg_humidity
+            )
 
     if weather_condition == "good":
 
@@ -1080,7 +1218,9 @@ def predict(data: PredictionInput):
 
         district_data,
 
-        data.weather_condition
+        data.weather_condition,
+        data.state,
+        data.district
     )
 
 
@@ -1141,14 +1281,55 @@ def predict(data: PredictionInput):
     )
 
 
-    equipment_risk = float(
+    # ==========================================
+    # EQUIPMENT RISK
+    # ==========================================
 
-        equipment_model.predict(
-            equipment_features
-        )[0]
-    )
+    if data.equipment_mode == "Auto":
+
+        # Use trained ML model
+        equipment_risk = float(
+            equipment_model.predict(
+                equipment_features
+            )[0]
+        )
+
+        equipment_risk_source = "ML Prediction"
 
 
+    elif data.equipment_mode == "Low":
+
+        # Low equipment failure simulation
+        equipment_risk = 10.0
+
+        equipment_risk_source = "Simulation - Low"
+
+
+    elif data.equipment_mode == "Medium":
+
+        # Medium equipment failure simulation
+        equipment_risk = 50.0
+
+        equipment_risk_source = "Simulation - Medium"
+
+
+    elif data.equipment_mode == "High":
+
+        # High equipment failure simulation
+        equipment_risk = 85.0
+
+        equipment_risk_source = "Simulation - High"
+
+
+    else:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid equipment mode"
+        )
+
+
+    # Keep risk between 0 and 100
     equipment_risk = float(
         np.clip(
             equipment_risk,
