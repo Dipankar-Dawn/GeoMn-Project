@@ -442,129 +442,21 @@ log(
             result.weather_values
                 ? result.weather_values.rainfall_mm
                 : '--';
+// ==========================================
+// DISPLAY SENTINEL-2 MAP
+// ==========================================
 
+document.getElementById(
+    'mapPlaceholder'
+).innerHTML = `
+    <iframe
+        src="/map"
+        class="w-full h-full min-h-[500px] border-0 rounded-xl"
+        title="Sentinel-2 Manganese Map">
+    </iframe>
+`;
 
-        document.getElementById(
-            'mapPlaceholder'
-        ).innerHTML = `
-
-            <div class="w-full h-full p-6">
-
-                <div class="text-center mb-5">
-
-                    <div class="p-3 inline-flex rounded-full
-                        bg-purple-500/10
-                        border border-purple-500/30
-                        text-purple-400">
-
-                        <i data-lucide="activity"
-                           class="w-8 h-8"></i>
-
-                    </div>
-
-                    <h4 class="text-lg font-bold
-                        text-slate-200 mt-3">
-
-                        ${district} Mining Analysis
-
-                    </h4>
-
-                </div>
-
-
-                <div class="grid grid-cols-2 gap-3
-                    max-w-md mx-auto">
-
-                    <div class="bg-black/50
-                        border border-white/10
-                        rounded-xl p-4">
-
-                        <p class="text-[10px]
-                            text-slate-400">
-
-                            PRODUCTION
-
-                        </p>
-
-                        <p class="text-purple-300
-                            font-bold mt-1">
-
-                            ${Number(production)
-                                .toLocaleString()}
-                            Tonnes
-
-                        </p>
-
-                    </div>
-
-
-                    <div class="bg-black/50
-                        border border-white/10
-                        rounded-xl p-4">
-
-                        <p class="text-[10px]
-                            text-slate-400">
-
-                            DATA YEAR
-
-                        </p>
-
-                        <p class="text-purple-300
-                            font-bold mt-1">
-
-                            ${year}
-
-                        </p>
-
-                    </div>
-
-
-                    <div class="bg-black/50
-                        border border-white/10
-                        rounded-xl p-4">
-
-                        <p class="text-[10px]
-                            text-slate-400">
-
-                            TEMPERATURE
-
-                        </p>
-
-                        <p class="text-orange-300
-                            font-bold mt-1">
-
-                            ${temperature} °C
-
-                        </p>
-
-                    </div>
-
-
-                    <div class="bg-black/50
-                        border border-white/10
-                        rounded-xl p-4">
-
-                        <p class="text-[10px]
-                            text-slate-400">
-
-                            RAINFALL
-
-                        </p>
-
-                        <p class="text-blue-300
-                            font-bold mt-1">
-
-                            ${rainfall} mm
-
-                        </p>
-
-                    </div>
-
-                </div>
-
-            </div>
-
-        `;
+    
 
 
         // ==========================================
