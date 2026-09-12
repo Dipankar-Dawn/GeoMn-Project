@@ -896,6 +896,13 @@ def read_root():
         LOGIN_HTML_PATH,
         media_type="text/html"
     )
+
+@app.get("/app")
+def main_app():
+    return FileResponse(
+        HTML_FILE_PATH,
+        media_type="text/html"
+    )
 # =========================================================
 # SERVE MANGANESE MAP
 # =========================================================
