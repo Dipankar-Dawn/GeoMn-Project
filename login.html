@@ -42,7 +42,7 @@ function doLogin() {
     sessionStorage.setItem('isLoggedIn', 'true');
     sessionStorage.setItem('loggedUser', uid);
     // Redirect to your actual website
-    window.location.href = 'moil_manganese_map.html';
+    window.location.href = 'my_gpt.html';
   } else {
     msg.textContent = 'Invalid UID or password';
   }
@@ -53,7 +53,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); })
 
 // If already logged in, skip login
 if (sessionStorage.getItem('isLoggedIn') === 'true') {
-  window.location.href = 'moil_manganese_map.html';
+  window.location.href = 'my_gpt.html';
 }
 </script>
 </body>
