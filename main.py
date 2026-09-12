@@ -289,7 +289,7 @@ def get_live_weather(state, district):
         geocode_response = requests.get(
             geocode_url,
             params=geocode_params,
-            timeout=4
+            timeout=10
         )
 
         geocode_response.raise_for_status()
@@ -328,7 +328,7 @@ def get_live_weather(state, district):
         weather_response = requests.get(
             weather_url,
             params=weather_params,
-            timeout=4
+            timeout=10
         )
 
         weather_response.raise_for_status()
