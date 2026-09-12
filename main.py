@@ -101,6 +101,11 @@ METADATA_PATH = (
     / "production_shortfall_model_metadata.pkl"
 )
 
+LOGIN_HTML_PATH =(
+    BASE_DIR
+    / "login.html"
+)
+
 HTML_FILE_PATH = (
     BASE_DIR
     / "my_gpt.html"
@@ -888,7 +893,7 @@ Format clearly with headings and bullet points.
 def read_root():
 
     return FileResponse(
-        HTML_FILE_PATH,
+        LOGIN_HTML_PATH,
         media_type="text/html"
     )
 # =========================================================
