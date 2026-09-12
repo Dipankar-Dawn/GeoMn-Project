@@ -848,6 +848,8 @@ if (reportElement) {
 
 });
 function logout() {
-    window.location.href = "/";
+    sessionStorage.removeItem('isLoggedIn');
+    sessionStorage.removeItem('loggedUser');
+    window.location.replace("/");
 }
 </script></body></html>
